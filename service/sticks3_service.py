@@ -224,9 +224,11 @@ def handle_stick(sock: socket.socket, addr) -> None:
         sock.settimeout(None)
         # Sondes keepalive : un stick disparu sans fermeture (extinction,
         # Wi-Fi perdu) ne doit pas rester un fantôme dans le hub et /health.
-        # Windows : 15 s d'inactivité, puis probes ; sinon on dégrade au calme.
+        # Valeurs tolérantes (30 s d'inactivité, probes espacées) : un lien
+        # Wi-Fi fragile ne doit pas se faire tuer par erreur. Windows : ~2 min
+        # max pour purger. Sinon on dégrade au calme.
         try:
-            sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 15000, 5000))
+            sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 30000, 10000))
         except (OSError, AttributeError):
             pass
         typ, payload = read_frame(sock)
