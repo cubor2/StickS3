@@ -77,3 +77,12 @@ if ($Background) {
     Write-Host 'Service StickS3 lance - laisse cette fenetre ouverte.' -ForegroundColor Cyan
     & $Python.Source $ServiceScript
 }
+
+# Un programme Python qui s'arrete en erreur ne fait pas automatiquement
+# echouer PowerShell. Propager son code garde la fenetre .cmd ouverte et rend
+# le diagnostic lisible au lieu de la fermer silencieusement.
+$ServiceExitCode = $LASTEXITCODE
+if ($ServiceExitCode -ne 0) {
+    Stop-WithMessage "Le service Python s'est arrete avec le code $ServiceExitCode. Le detail est affiche ci-dessus."
+}
+exit 0
