@@ -2,11 +2,14 @@
 // net.h — WiFi + protocole binaire minimal vers le service PC.
 //
 // Trame : [u32 le longueur_payload][u8 type][payload]
-//   0x01 HELLO       stick→svc   champs séparés par \t
+//   0x01 HELLO       stick→svc   nom \t firmware \t jeton
 //   0x02 WAV         stick→svc   WAV complet (header 44 o + PCM s16le mono)
 //   0x03 NOTIFY      svc→stick   titre \t message \t son (frites|ok|error)
 //   0x04 TRANSCRIPT  svc→stick   statut \t message \t extrait (statut: ok|error)
 //   0x05 ENTER       stick→svc   appui Entrée fixe dans la fenêtre active
+// Découverte UDP : requête "STICKS3_DISCOVER_V1" en broadcast, réponse
+// "STICKS3_HERE_V1 <port_tcp> <nom_pc>" ; réclamation "STICKS3_CLAIM_V1
+// <port_tcp> <nom_pc>" pour attacher le Stick à un PC précis.
 // ------------------------------------------------------------
 #pragma once
 #include <Arduino.h>
@@ -16,6 +19,7 @@ namespace net {
 void begin();
 bool wifiUp();
 bool svcUp();
+void serviceName(char* buf, size_t cap);  // nom du PC attaché, "" si inconnu
 void loop();          // reconnexion + pompage des événements entrants
 
 bool sendHello();

@@ -15,7 +15,11 @@ if (Test-Path -LiteralPath $CfgPath) {
     } catch { }
 }
 
-$Payload = [Text.Encoding]::ASCII.GetBytes(('STICKS3_CLAIM_V1 {0}' -f $TcpPort))
+# Nom du PC inclus dans la reclamation : le Stick sait a qui il parle.
+$PcName = [regex]::Replace($env:COMPUTERNAME, '[^A-Za-z0-9-]', '')
+if ($PcName.Length -gt 16) { $PcName = $PcName.Substring(0, 16) }
+$Payload = [Text.Encoding]::ASCII.GetBytes(('STICKS3_CLAIM_V1 {0} {1}' -f $TcpPort, $PcName))
+
 $Targets = [System.Collections.Generic.List[string]]::new()
 $Targets.Add('255.255.255.255')
 

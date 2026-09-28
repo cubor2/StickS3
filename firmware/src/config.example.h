@@ -26,3 +26,9 @@
 
 // Fréquence d'échantillonnage audio — standard STT
 #define SAMPLE_RATE     16000
+
+// Jeton partagé avec le service (service_token dans service/config.json).
+// Il doit être identique des deux côtés. Génère le tien, par exemple :
+//   python -c "import secrets; print(secrets.token_urlsafe(18))"
+// Vide = authentification désactivée (déconseillé sur un réseau partagé).
+#define SERVICE_TOKEN   ""

@@ -4,6 +4,7 @@
   "discovery_port": 8789,
   "notify_host": "127.0.0.1",
   "notify_port": 8788,
+  "service_token": "",
 
   "stt_base_url": "https://api.openai.com/v1",
   "stt_model": "gpt-4o-mini-transcribe",

@@ -6,10 +6,13 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
-// Les anciens config.h locaux n'avaient pas encore ce réglage. La valeur
-// reste conventionnelle avec le service PC sans imposer de modifier ce fichier.
+// Anciens config.h locaux sans ces réglages : valeurs conventionnelles
+// avec le service PC, pour ne pas imposer de modifier ce fichier.
 #ifndef DISCOVERY_PORT
 #define DISCOVERY_PORT 8789
+#endif
+#ifndef SERVICE_TOKEN
+#define SERVICE_TOKEN ""
 #endif
 
 namespace net {
@@ -30,6 +33,29 @@ static const char* DISCOVERY_RESPONSE = "STICKS3_HERE_V1 ";
 // UDP entendu sur la même socket que la découverte, sans tour de main TCP.
 static const char* DISCOVERY_CLAIM = "STICKS3_CLAIM_V1 ";
 
+// Nom du PC auquel on est attaché (affiché sur l'écran d'accueil).
+static char svcName[20] = {0};
+
+static void sanitizeName(const char* src, char* dst, size_t cap) {
+  size_t n = 0;
+  for (; src[n] && n + 1 < cap; ++n) {
+    char c = src[n];
+    bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '-';
+    dst[n] = ok ? c : '-';
+  }
+  dst[n] = 0;
+}
+
+// "PORT [NOM]" : le nom est optionnel (compat ancien service).
+static bool parseResponse(const char* rest, unsigned int* port) {
+  char tmp[20] = {0};
+  int fields = sscanf(rest, "%u %19s", port, tmp);
+  if (fields < 1 || *port == 0 || *port > 65535) return false;
+  if (fields == 2) sanitizeName(tmp, svcName, sizeof(svcName));
+  return true;
+}
+
 // Le PC répond au broadcast UDP avec son IP et le port TCP du service.
 // Cela évite d'encoder une IP locale dans le firmware.
 static void discoveryTick(uint32_t now) {
@@ -48,8 +74,7 @@ static void discoveryTick(uint32_t now) {
     response[max(0, n)] = 0;
     unsigned int port = 0;
     if (strncmp(response, DISCOVERY_CLAIM, strlen(DISCOVERY_CLAIM)) == 0 &&
-        sscanf(response + strlen(DISCOVERY_CLAIM), "%u", &port) == 1 &&
-        port > 0 && port <= 65535) {
+        parseResponse(response + strlen(DISCOVERY_CLAIM), &port)) {
       IPAddress claimer = discovery.remoteIP();
       // Déjà attaché à ce PC : ne pas couper la connexion pour rien.
       if (!(claimer == serviceIp) || !client.connected()) {
@@ -66,8 +91,7 @@ static void discoveryTick(uint32_t now) {
         }
       }
     } else if (strncmp(response, DISCOVERY_RESPONSE, strlen(DISCOVERY_RESPONSE)) == 0 &&
-        sscanf(response + strlen(DISCOVERY_RESPONSE), "%u", &port) == 1 &&
-        port > 0 && port <= 65535) {
+        parseResponse(response + strlen(DISCOVERY_RESPONSE), &port)) {
       serviceIp = discovery.remoteIP();
       servicePort = (uint16_t)port;
       serviceKnown = true;
@@ -137,8 +161,10 @@ bool sendWav(const uint8_t hdr44[44], const int16_t* pcm, size_t pcmBytes) {
 }
 
 bool sendHello() {
-  char payload[96];
-  snprintf(payload, sizeof(payload), "%s\tfw-1.0", DEVICE_NAME);
+  // Le jeton protège l'injection de texte : sans le bon jeton, le service
+  // coupe la connexion sans discussion. Vide = pas d'authentification.
+  char payload[112];
+  snprintf(payload, sizeof(payload), "%s\tfw-1.1\t%s", DEVICE_NAME, SERVICE_TOKEN);
   return sendFrame(0x01, (const uint8_t*)payload, strlen(payload));
 }
 
@@ -253,6 +279,9 @@ void begin() {
 
 bool wifiUp() { return WiFi.status() == WL_CONNECTED; }
 bool svcUp()  { return client.connected(); }
+
+// Nom (sanitisé) du PC auquel le Stick est attaché, vide si inconnu.
+void serviceName(char* buf, size_t cap) { snprintf(buf, cap, "%s", svcName); }
 
 void loop() {
   // Heartbeat INCONDITIONNEL toutes les secondes — le diagnostic série

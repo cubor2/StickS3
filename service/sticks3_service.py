@@ -41,6 +41,9 @@ MAX_WAV = 8 * 1024 * 1024  # 8 Mo : large pour 60 s de 16 kHz mono
 DISCOVERY_REQUEST = b"STICKS3_DISCOVER_V1"
 DISCOVERY_RESPONSE = b"STICKS3_HERE_V1"
 
+# Nom affiché par le Stick : lettres, chiffres et tirets uniquement.
+PC_NAME = re.sub(r"[^A-Za-z0-9-]", "", socket.gethostname())[:16] or "PC"
+
 # Corrections locales après STT : elles ne touchent que des mots entiers pour
 # ne pas altérer le reste d'une dictée. Les moteurs de transcription hésitent
 # fréquemment sur ce prénom, surtout avec la prononciation française.
@@ -100,6 +103,14 @@ def read_frame(sock: socket.socket) -> tuple[int, bytes]:
 
 def send_frame(sock: socket.socket, typ: int, payload: bytes) -> None:
     sock.sendall(struct.pack("<I", len(payload)) + bytes([typ]) + payload)
+
+
+def hello_parts(payload: bytes) -> tuple[str, str]:
+    """HELLO : nom \t firmware \t jeton. Le jeton est optionnel côté Stick."""
+    fields = payload.decode("utf-8", "replace").split("\t")
+    name = fields[0].strip() if fields else ""
+    token = fields[2].strip() if len(fields) > 2 else ""
+    return name, token
 
 
 # ------------------------------------------------------------
@@ -209,8 +220,18 @@ def handle_stick(sock: socket.socket, addr) -> None:
     try:
         sock.settimeout(None)
         typ, payload = read_frame(sock)
-        if typ == MSG_HELLO:
-            name = payload.decode("utf-8", "replace").split("\t")[0] or name
+        if typ != MSG_HELLO:
+            log(f"[{name}] trame inattendue au lieu du HELLO : 0x{typ:02x}")
+            return
+        stick_name, token = hello_parts(payload)
+        expected = str(CFG.get("service_token", "")).strip()
+        if expected and token != expected:
+            # Sans bon jeton : aucun enregistrement, aucune discussion.
+            # Le service n'a aucune raison de justifier sa présence.
+            log(f"[{stick_name or name}] connexion refusee : jeton invalide")
+            return
+        if stick_name:
+            name = stick_name
         HUB.register(name, sock)
 
         while True:
@@ -278,7 +299,11 @@ def discovery_server(port: int, tcp_port: int) -> None:
             except socket.timeout:
                 continue
             if payload == DISCOVERY_REQUEST:
-                srv.sendto(f"{DISCOVERY_RESPONSE.decode()} {tcp_port}".encode(), addr)
+                # Le nom du PC permet au Stick d'afficher à qui il parle.
+                srv.sendto(
+                    f"{DISCOVERY_RESPONSE.decode()} {tcp_port} {PC_NAME}".encode(),
+                    addr,
+                )
     finally:
         srv.close()
 
@@ -345,6 +370,11 @@ def main() -> None:
             log("clé API : ABSENTE — définis STT_API_KEY avant de dicter")
     except Exception:
         pass
+
+    if str(CFG.get("service_token", "")).strip():
+        log("authentification stick : activée")
+    else:
+        log("authentification stick : DÉSACTIVÉE (service_token vide)")
 
     threading.Thread(
         target=http_server,

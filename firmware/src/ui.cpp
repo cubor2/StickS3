@@ -149,7 +149,38 @@ void wifiWaiting(uint32_t now) { micThinking(now); }
 // redessiner tout l'écran à chaque loop produisait le clignotement au boot.
 void wifiTick(uint32_t now) { processingSpinner(now); }
 
-void idle(bool, uint32_t) { micIdle(); }
+void idle(bool svcUp, const char* pcName, uint32_t) {
+  micIdle();
+  // Petit retour d'état en bas d'écran : à qui parle le Stick. Avec
+  // plusieurs PC sur le réseau, c'est ce qui évite de dicter au mauvais.
+  if (!svcUp || pcName[0]) {
+    fontSmall();
+    M5.Lcd.setTextDatum(middle_center);
+    M5.Lcd.setTextColor(svcUp ? FACE_INK : FACE_RED);
+    M5.Lcd.drawString(svcUp ? pcName : "PC KO", W / 2, 222);
+  }
+}
+
+void volume(int step, int maxStep) {
+  clear();
+  char buf[4];
+  snprintf(buf, sizeof(buf), "%d", step);
+  M5.Lcd.setFont(&fonts::Font4);
+  M5.Lcd.setTextDatum(middle_center);
+  M5.Lcd.setTextColor(FACE_INK);
+  M5.Lcd.drawString(buf, W / 2, 90);
+  const int segs = maxStep + 1;
+  const int sw = 14, gap = 4;
+  const int total = segs * sw + (segs - 1) * gap;
+  const int x0 = (W - total) / 2;
+  for (int i = 0; i < segs; ++i) {
+    uint16_t c = (i <= step) ? FACE_GREEN : FACE_INK;
+    M5.Lcd.fillRoundRect(x0 + i * (sw + gap), 150, sw, 18, 3, c);
+  }
+  fontSmall();
+  M5.Lcd.setTextColor(FACE_INK);
+  M5.Lcd.drawString("volume", W / 2, 30);
+}
 
 void rec(uint32_t elapsedMs, uint32_t) {
   micListening();

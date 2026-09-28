@@ -17,7 +17,8 @@ void begin();
 void bootSplash();
 void wifiWaiting(uint32_t now);
 void wifiTick(uint32_t now);
-void idle(bool svcUp, uint32_t now);
+void idle(bool svcUp, const char* pcName, uint32_t now);
+void volume(int step, int maxStep);
 void rec(uint32_t elapsedMs, uint32_t maxMs);  // dessin complet, 1x
 void recTime(uint32_t elapsedMs, uint32_t maxMs);
 void recVU(int level);

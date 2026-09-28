@@ -13,6 +13,7 @@
 // ------------------------------------------------------------
 #include "M5Unified.h"
 #include "esp_heap_caps.h"
+#include <Preferences.h>
 #include "config.h"
 #include "ui.h"
 #include "net.h"
@@ -28,6 +29,7 @@ enum State : uint8_t {
   ST_NOTIFY,      // écran temporaire (sonnette / message)
   ST_ENTER,       // brève validation visuelle du bouton Entrée
   ST_TRANSIENT,   // écrans courts (collé / annulé / erreur)
+  ST_VOLUME,      // réglage du volume (A maintenu, B crans)
 };
 static State state = ST_WIFI;
 static uint32_t stateSince = 0;
@@ -178,6 +180,25 @@ static void sfxEnter() {                 // touche Entrée — clic court, sobre
   M5.Speaker.begin();
   beep(880, 140);
   M5.Speaker.end();
+}
+
+// ---------- volume réglable -----------------------------------
+// 0-5 crans, plafonnés à ~78 % comme le recommande la note constructeur
+// (au-delà, le StickS3 peut redémarrer sur batterie). Persisté en NVS :
+// un réglage qui disparaîtrait à chaque extinction auto serait absurde.
+static const uint8_t VOL_STEPS[6] = {0, 40, 80, 120, 160, 200};
+static uint8_t volStep = 2;
+static uint32_t aHeldSince = 0;
+
+static void applyVolume() {
+  M5.Speaker.setVolume(VOL_STEPS[volStep]);
+}
+
+static void saveVolume() {
+  Preferences prefs;
+  prefs.begin("sticks3", false);
+  prefs.putUChar("vol", volStep);
+  prefs.end();
 }
 
 // ---------- bascule micro / haut-parleur ----------------------
@@ -386,7 +407,9 @@ static void enterIdle() {
     playNotify(pendTitle, pendMsg, pendSnd);
     return;
   }
-  ui::idle(net::svcUp(), millis());
+  char pcName[20];
+  net::serviceName(pcName, sizeof(pcName));
+  ui::idle(net::svcUp(), pcName, millis());
   go(ST_IDLE);
 }
 
@@ -414,6 +437,17 @@ void setup() {
   micCfg.task_priority = 1;
   M5.Mic.config(micCfg);
   M5.Speaker.setVolume(SPEAKER_VOLUME);
+  // Le réglage utilisateur (écran volume) écrase la valeur usine si présent.
+  {
+    Preferences prefs;
+    prefs.begin("sticks3", true);
+    uint8_t saved = prefs.getUChar("vol", 255);
+    prefs.end();
+    if (saved <= 5) {
+      volStep = saved;
+      applyVolume();
+    }
+  }
 
   ui::begin();
   ui::bootSplash();
@@ -447,7 +481,9 @@ void loop() {
     if (screenSleeping) {
       // Le clic réveille ET conserve son action : pas de double-geste pénible.
       wakeScreen();
-      ui::idle(net::svcUp(), now);
+      char pcName[20];
+      net::serviceName(pcName, sizeof(pcName));
+      ui::idle(net::svcUp(), pcName, now);
     } else {
       ui::setDimmed(false);
     }
@@ -456,8 +492,8 @@ void loop() {
   handleNet();
 
   // Bouton droit : Entrée fixe dans la fenêtre PC, sauf pendant une prise
-  // où il garde l'annulation pour éviter un envoi involontaire.
-  if (bClicked && state != ST_RECORDING && net::sendEnter()) {
+  // (annulation) ou le réglage volume (B change le cran).
+  if (bClicked && state != ST_RECORDING && state != ST_VOLUME && net::sendEnter()) {
     sfxEnter();
     // Le bip est bloquant : rafraîchir l'horloge avant de créer un état
     // temporisé, sinon ST_ENTER se croit déjà expiré dans ce même tour.
@@ -492,18 +528,48 @@ void loop() {
       break;
 
     case ST_IDLE: {
-      // redessin complet seulement si l'etat du service a change
+      // redessin complet seulement si l'etat du service (ou son nom) change
       bool up = net::svcUp();
       static bool lastUp = true;
-      if (up != lastUp) {
-        ui::idle(up, now);
+      static char lastName[20] = "";
+      char pcName[20];
+      net::serviceName(pcName, sizeof(pcName));
+      if (up != lastUp || strcmp(pcName, lastName) != 0) {
+        ui::idle(up, pcName, now);
         lastUp = up;
+        snprintf(lastName, sizeof(lastName), "%s", pcName);
       }
       if (aClicked) {
         startRecording();
       }
+      // Long-press A : réglage du volume, sans déclencher la dictée.
+      if (keyA.isPressed()) {
+        if (!aHeldSince) {
+          aHeldSince = now;
+        } else if (now - aHeldSince > 600) {
+          ui::volume(volStep, 5);
+          go(ST_VOLUME);
+        }
+      } else {
+        aHeldSince = 0;
+      }
       break;
     }
+
+    case ST_VOLUME:
+      // B : cran suivant (boucle 0..5) avec bip-test au nouveau volume.
+      // A relâché : on valide, on persiste, retour au calme.
+      if (bClicked) {
+        volStep = (volStep + 1) % 6;
+        applyVolume();
+        ui::volume(volStep, 5);
+        sfxOk();
+      }
+      if (aClicked || !keyA.isPressed()) {
+        saveVolume();
+        enterIdle();
+      }
+      break;
 
     case ST_RECORDING:
       recordLoop();

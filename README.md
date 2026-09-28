@@ -28,9 +28,10 @@ Ton M5 StickS3 en deux accessoires pour le vibe code :
 
 Le Stick ne connaît aucune adresse IP de PC. Une fois connecté au Wi-Fi, il
 diffuse périodiquement une requête UDP sur le port `8789`. Le service PC
-répond directement avec son IP et son port TCP (`8787`), puis le Stick garde
-cette cible et se reconnecte automatiquement. Cela permet de passer du fixe
-au portable sans modifier ni reflasher le firmware.
+répond avec son IP, son port TCP (`8787`) et son **nom**, que le Stick
+affiche sur son écran d'accueil ; puis le Stick garde cette cible et se
+reconnecte automatiquement. Cela permet de passer du fixe au portable sans
+modifier ni reflasher le firmware.
 
 ```
 StickS3 -- UDP broadcast :8789 --> service Windows
@@ -47,10 +48,25 @@ sans payload, plutôt qu'un relais de touches arbitraires.
 Plusieurs PC peuvent faire tourner le service en même temps. Pour attacher le
 Stick au PC **où tu te trouves**, double-clique `service\Prendre-Stick.cmd` :
 il diffuse une réclamation UDP que le Stick entend même s'il est connecté à
-une autre machine, et il bascule en quelques secondes. Astuce : épingler ce
+une autre machine, et il bascule en quelques secondes. L'écran d'accueil du
+Stick affiche en bas le nom du PC auquel il parle. Astuce : épingler ce
 fichier à la barre des tâches. Au démarrage du Stick, si plusieurs services
 répondent en même temps, il prend le premier — un double-clic sur
 `Prendre-Stick.cmd` tranche.
+
+### Authentification Stick ↔ service
+
+Toute personne présente sur le même réseau peut tenter le port TCP : le
+service n'exécute donc que ce qui est **authentifié par un jeton partagé**.
+Le Stick envoie ce jeton dans son `HELLO` ; sans le bon jeton, la connexion
+est coupée sans réponse.
+
+1. Génère un jeton : `python -c "import secrets; print(secrets.token_urlsafe(18))"`
+2. Mets-le dans `firmware/src/config.h` (`SERVICE_TOKEN`) — reflashe ensuite.
+3. Mets le même dans `service/config.json` (`service_token`) sur **chaque PC**.
+
+Si `service_token` est vide, le service accepte toute connexion et le signale
+dans ses logs au démarrage. Le jeton ne se commit jamais (comme les clés Wi-Fi).
 
 ## 1. Service PC (à lancer en premier)
 
@@ -101,6 +117,7 @@ curl -X POST http://127.0.0.1:8788/notify -d '{\"title\":\"C EST PRET !\",\"mess
 | `paste_mode` | `clipboard` | `clipboard` (Ctrl+V) ou `type` (frappe lettre à lettre) |
 | `paste_shortcut` | `ctrl+v` | raccourci de collage (ex. `ctrl+shift+v`) |
 | `discovery_port` | `8789` | port UDP de découverte automatique du Stick |
+| `service_token` | *(vide)* | jeton que le Stick doit présenter (cf. Authentification) |
 
 La clé API ne se met **jamais** dans un fichier du repo : variable
 d'environnement `STT_API_KEY` (ou `OPENAI_API_KEY`). Le lanceur Windows
@@ -133,6 +150,7 @@ bouton reset sur le côté, le LED verte clignote = mode download.
 | Geste | Action |
 |---|---|
 | **A** (écran accueil) | démarrer la dictée — bip montant |
+| **A maintenu** (accueil) | réglage du volume : chaque appui sur **B** monte d'un cran (0–5), relâcher A valide — mémorisé |
 | **A** (pendant la dictée) | envoyer — bip descendant, texte collé sur le PC |
 | **B** (pendant la dictée) | annuler |
 | **B** (écran accueil) | envoie `Entrée` dans la fenêtre PC active |
@@ -153,7 +171,8 @@ visuels locaux (VU-mètre, spinner, ondes pour `Entrée`).
 |---|---|
 | `WIFI_SSID` / `WIFI_PASSWORD` | WiFi 2.4 GHz (pas de 5 GHz avec l'ESP32) |
 | `DISCOVERY_PORT` | port UDP de découverte du service (8789 par défaut) |
-| `SPEAKER_VOLUME` | 0–255 ; rester sous ~75 % sur batterie |
+| `SERVICE_TOKEN` | jeton partagé avec le service (authentification) |
+| `SPEAKER_VOLUME` | volume usine ; réglable ensuite sur le Stick (A maintenu) |
 | `MAX_RECORD_SEC` | durée max d'une dictée (défaut 60 s) |
 
 ## Notes techniques
