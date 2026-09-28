@@ -1,0 +1,18 @@
+# Configs locales (WiFi, clés API) — jamais dans le repo
+firmware/src/config.h
+service/config.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# PlatformIO
+firmware/.pio/
+firmware/.vscode/
+
+# Divers
+*.wav
+*.log
+.DS_Store

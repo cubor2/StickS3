@@ -1,0 +1,15 @@
+{
+  "listen_host": "0.0.0.0",
+  "listen_port": 8787,
+  "discovery_port": 8789,
+  "notify_host": "127.0.0.1",
+  "notify_port": 8788,
+
+  "stt_base_url": "https://api.openai.com/v1",
+  "stt_model": "gpt-4o-mini-transcribe",
+  "stt_language": "fr",
+  "stt_prompt": "",
+
+  "paste_mode": "clipboard",
+  "paste_delay_ms": 60
+}
