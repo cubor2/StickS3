@@ -162,7 +162,9 @@ bouton reset sur le côté, le LED verte clignote = mode download.
 Après une période d'inactivité sur l'écran d'accueil, le Stick réduit sa
 luminosité à 90 secondes, éteint l'écran à 3 minutes et coupe son alimentation
 à 5 minutes. Le premier clic après la veille réveille **et** effectue son
-action : pas besoin de cliquer deux fois.
+action : pas besoin de cliquer deux fois. S'il y a un accéléromètre, tout
+mouvement net repousse la veille : un stick porté reste éveillé, un stick
+posé s'endort normalement.
 
 L'interface est volontairement minimale : fond menthe, micro fixe et retours
 visuels locaux (VU-mètre, spinner, ondes pour `Entrée`).

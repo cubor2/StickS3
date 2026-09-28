@@ -38,11 +38,17 @@ static void micIdle() { clear(); microphone(W / 2, MIC_CY); }
 
 static void micListening() { clear(); microphone(W / 2, MIC_CY, FACE_GREEN); }
 
+static int spinnerFrame = -1;  // -1 : forcer le prochain dessin de la roue
+
 static void processingSpinner(uint32_t now) {
-  // Roue de chargement lisible juste sous le micro.
+  // Roue de chargement lisible juste sous le micro. On ne redessine que
+  // quand le cran change (~11 Hz) : effacer/redessiner la zone à chaque
+  // tour de boucle fait scintiller l'écran sans rien changer à l'image.
   constexpr int cx = W / 2, cy = 177;
-  M5.Lcd.fillRect(cx - 22, cy - 22, 45, 45, FACE_MINT);
   int active = (now / 90) % 12;
+  if (active == spinnerFrame) return;
+  spinnerFrame = active;
+  M5.Lcd.fillRect(cx - 22, cy - 22, 45, 45, FACE_MINT);
   for (int i = 0; i < 12; ++i) {
     float a = (float)i * 0.52359878f;  // 2π / 12
     int x1 = cx + (int)(cosf(a) * 9);
@@ -67,16 +73,36 @@ static void micThinking(uint32_t now) {
 
 static int lastEnterFrame = -1;
 static uint32_t enterStartedAt = 0;
+static int lastWaveR[2] = {-1, -1};     // rayons des ondes du frame précédent
+static int lastWaveR2[2] = {-1, -1};    // leur second contour (+1 px)
 
 static void micEnterFrame(uint32_t now) {
   // Animation calée sur l'appui, jamais sur une phase arbitraire de millis().
   uint32_t e = now - enterStartedAt;
   int frame = (int)(e / 90);
   if (frame == lastEnterFrame) return;
+  bool fullDraw = (lastEnterFrame == -1);
   lastEnterFrame = frame;
 
-  clear(FACE_GREEN);
-  microphone(W / 2, MIC_CY, FACE_MINT);  // ancre : jamais déplacée
+  // Dessin différentiel : effacer les ondes du frame précédent puis dessiner
+  // les nouvelles. Un clear() complet à chaque frame faisait scintiller
+  // l'écran entier pendant toute l'animation.
+  if (fullDraw) {
+    clear(FACE_GREEN);
+    lastWaveR[0] = lastWaveR[1] = -1;
+    lastWaveR2[0] = lastWaveR2[1] = -1;
+  } else {
+    for (int k = 0; k < 2; ++k) {
+      if (lastWaveR[k] > 0) {
+        M5.Lcd.drawCircle(W / 2, MIC_CY, lastWaveR[k], FACE_GREEN);
+      }
+      if (lastWaveR2[k] > 0) {
+        M5.Lcd.drawCircle(W / 2, MIC_CY, lastWaveR2[k], FACE_GREEN);
+      }
+      lastWaveR[k] = lastWaveR2[k] = -1;
+    }
+  }
+  microphone(W / 2, MIC_CY, FACE_MINT);  // répare les arcades traversantes
 
   // 1. Ondes de validation qui s'échappent du micro (0 → 1,15 s).
   if (e < 1150) {
@@ -85,10 +111,11 @@ static void micEnterFrame(uint32_t now) {
       if (ph > 670) continue;             // l'onde meurt avant de boucler
       int r = 36 + (int)(ph * 52 / 740);  // 36 → 88 px
       M5.Lcd.drawCircle(W / 2, MIC_CY, r, FACE_MINT);
-      if (ph < 370) M5.Lcd.drawCircle(W / 2, MIC_CY, r + 1, FACE_MINT);
+      M5.Lcd.drawCircle(W / 2, MIC_CY, r + 1, FACE_MINT);
+      lastWaveR[k] = r;
+      lastWaveR2[k] = r + 1;
     }
   }
-
 }
 
 static void micDone() {

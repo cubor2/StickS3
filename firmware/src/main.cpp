@@ -14,6 +14,7 @@
 #include "M5Unified.h"
 #include "esp_heap_caps.h"
 #include <Preferences.h>
+#include <math.h>
 #include "config.h"
 #include "ui.h"
 #include "net.h"
@@ -36,7 +37,12 @@ static uint32_t stateSince = 0;
 static constexpr uint32_t DIM_AFTER_MS = 90UL * 1000UL;
 static constexpr uint32_t SCREEN_SLEEP_AFTER_MS = 3UL * 60UL * 1000UL;
 static constexpr uint32_t POWER_OFF_AFTER_MS = 5UL * 60UL * 1000UL;
+// IMU : au-delà de ce delta (en G, somme des axes), le stick est considéré
+// porté et la veille est repoussée. La présence de l'IMU est vérifiée à
+// l'exécution — le code reste inerte sur un stick sans accéléromètre.
+static constexpr float IMU_WAKE_DELTA = 0.10f;
 static uint32_t lastActivity = 0;
+static uint32_t lastImuCheck = 0;
 static bool screenSleeping = false;
 static void go(State s) {
   state = s;
@@ -429,6 +435,7 @@ void setup() {
   lastActivity = millis();
   Serial.printf("[boot] carte detectee: %d, GPIO11=%d GPIO12=%d\n",
                 (int)M5.getBoard(), digitalRead(11), digitalRead(12));
+  Serial.printf("[boot] imu dispo : %d\n", (int)M5.Imu.isEnabled());
   // Le micro M5Unified est une tâche de capture continue. Sans affinité elle
   // peut prendre le coeur de la loop Arduino (UI/boutons) et donner un stick
   // presque figé. On la réserve au coeur système, avant le premier Mic.begin.
@@ -504,6 +511,22 @@ void loop() {
 
   // Cycle d'inactivité : assombrir → vraie veille écran → coupure matérielle.
   if (state == ST_IDLE) {
+    // Un stick porté ne s'endort pas dans la main : l'IMU, s'il y en a un,
+    // rafraîchit l'activité au moindre mouvement net.
+    if (M5.Imu.isEnabled() && now - lastImuCheck >= 200) {
+      lastImuCheck = now;
+      M5.Imu.update();
+      float ax = 0, ay = 0, az = 0;
+      M5.Imu.getAccel(&ax, &ay, &az);
+      static float lastAx = 0, lastAy = 0, lastAz = 0;
+      float delta = fabsf(ax - lastAx) + fabsf(ay - lastAy) + fabsf(az - lastAz);
+      lastAx = ax;
+      lastAy = ay;
+      lastAz = az;
+      if (delta > IMU_WAKE_DELTA) {
+        lastActivity = now;
+      }
+    }
     uint32_t idleFor = now - lastActivity;
     if (idleFor >= POWER_OFF_AFTER_MS) {
       Serial.println("[power] inactif 5 min : extinction");
