@@ -11,7 +11,17 @@ $TaskName = 'StickS3 Service'
 
 function Stop-WithMessage([string]$Message) {
     Write-Host "`nERREUR - $Message" -ForegroundColor Red
-    if (-not $Background) { Read-Host 'Appuie sur Entree pour fermer' | Out-Null }
+    if ($Background) {
+        # Fenetre cachee (tache planifiee) : sans trace ecrite, l'erreur
+        # serait totalement invisible. On logge dans le fichier du service.
+        $LogDir = Join-Path $env:LOCALAPPDATA 'StickS3'
+        New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+        Add-Content -Path (Join-Path $LogDir 'service.log') `
+            -Value ("[{0}] ERREUR lanceur : {1}" -f (Get-Date -Format 'HH:mm:ss'), $Message) `
+            -Encoding Unicode
+        exit 1
+    }
+    Read-Host 'Appuie sur Entree pour fermer' | Out-Null
     exit 1
 }
 
@@ -70,19 +80,22 @@ try {
 } catch { }
 
 if ($Background) {
+    # Tache planifiee / fenetre cachee : jamais d'attente clavier ici.
     $LogDir = Join-Path $env:LOCALAPPDATA 'StickS3'
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
     & $Python.Source $ServiceScript *>> (Join-Path $LogDir 'service.log')
-} else {
-    Write-Host 'Service StickS3 lance - laisse cette fenetre ouverte.' -ForegroundColor Cyan
-    & $Python.Source $ServiceScript
+    exit $LASTEXITCODE
 }
 
-# Un programme Python qui s'arrete en erreur ne fait pas automatiquement
-# echouer PowerShell. Propager son code garde la fenetre .cmd ouverte et rend
-# le diagnostic lisible au lieu de la fermer silencieusement.
+Write-Host 'Service StickS3 lance - laisse cette fenetre ouverte (Ctrl+C pour arreter).' -ForegroundColor Cyan
+& $Python.Source $ServiceScript
 $ServiceExitCode = $LASTEXITCODE
+Write-Host ''
 if ($ServiceExitCode -ne 0) {
-    Stop-WithMessage "Le service Python s'est arrete avec le code $ServiceExitCode. Le detail est affiche ci-dessus."
+    Write-Host ("Le service s'est arrete avec le code {0}. Le detail est affiche ci-dessus." -f $ServiceExitCode) -ForegroundColor Red
+} else {
+    Write-Host 'Service arrete.' -ForegroundColor Yellow
 }
-exit 0
+# Le .cmd appelant termine par un `pause` : la fenetre reste ouverte pour
+# relire les logs, que le service se soit arrete proprement ou non.
+exit $ServiceExitCode

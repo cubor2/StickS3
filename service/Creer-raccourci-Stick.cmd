@@ -11,4 +11,5 @@ if not exist "%STICKS3_ICO%" (
 )
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ws = New-Object -ComObject WScript.Shell; $lnkPath = Join-Path $ws.SpecialFolders('Programs') 'Prendre-Stick.lnk'; $lnk = $ws.CreateShortcut($lnkPath); $lnk.TargetPath = $env:STICKS3_SRC; $lnk.WorkingDirectory = Split-Path $env:STICKS3_SRC; $lnk.IconLocation = ($env:STICKS3_ICO + ',0'); $lnk.Description = 'Attache le StickS3 a ce PC'; $lnk.Save(); Write-Host ('Raccourci cree : ' + $lnkPath)"
-if errorlevel 1 pause
+echo.
+pause
