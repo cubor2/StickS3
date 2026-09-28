@@ -219,6 +219,13 @@ def handle_stick(sock: socket.socket, addr) -> None:
     name = f"{addr[0]}"
     try:
         sock.settimeout(None)
+        # Sondes keepalive : un stick disparu sans fermeture (extinction,
+        # Wi-Fi perdu) ne doit pas rester un fantôme dans le hub et /health.
+        # Windows : 15 s d'inactivité, puis probes ; sinon on dégrade au calme.
+        try:
+            sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 15000, 5000))
+        except (OSError, AttributeError):
+            pass
         typ, payload = read_frame(sock)
         if typ != MSG_HELLO:
             log(f"[{name}] trame inattendue au lieu du HELLO : 0x{typ:02x}")

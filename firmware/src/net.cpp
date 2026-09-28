@@ -92,12 +92,18 @@ static void discoveryTick(uint32_t now) {
       }
     } else if (strncmp(response, DISCOVERY_RESPONSE, strlen(DISCOVERY_RESPONSE)) == 0 &&
         parseResponse(response + strlen(DISCOVERY_RESPONSE), &port)) {
-      serviceIp = discovery.remoteIP();
-      servicePort = (uint16_t)port;
-      serviceKnown = true;
-      if (Serial) {
-        Serial.printf("[discovery] service : %s:%u\n",
-                      serviceIp.toString().c_str(), servicePort);
+      // Stick attaché : la découverte ne déplace pas la cible. Avec deux
+      // services actifs, les réponses alternent — les suivre ferait osciller
+      // le nom à l'écran et rattacher au premier venu après un drop. Seule
+      // une réclamation peut changer d'avis ; un PC disparu rouvre la porte.
+      if (!client.connected()) {
+        serviceIp = discovery.remoteIP();
+        servicePort = (uint16_t)port;
+        serviceKnown = true;
+        if (Serial) {
+          Serial.printf("[discovery] service : %s:%u\n",
+                        serviceIp.toString().c_str(), servicePort);
+        }
       }
     }
   }

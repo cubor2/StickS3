@@ -50,9 +50,11 @@ Stick au PC **où tu te trouves**, double-clique `service\Prendre-Stick.cmd` :
 il diffuse une réclamation UDP que le Stick entend même s'il est connecté à
 une autre machine, et il bascule en quelques secondes. L'écran d'accueil du
 Stick affiche en bas le nom du PC auquel il parle. Astuce : épingler ce
-fichier à la barre des tâches. Au démarrage du Stick, si plusieurs services
-répondent en même temps, il prend le premier — un double-clic sur
-`Prendre-Stick.cmd` tranche.
+fichier à la barre des tâches. Une fois attaché, le Stick n'en change que
+sur réclamation — la découverte ne le fait pas rebasculer toute seule, et si
+le PC auquel il parle disparaît, il redécouvre naturellement. Au démarrage du
+Stick, si plusieurs services répondent en même temps, il prend le premier —
+un double-clic sur `Prendre-Stick.cmd` tranche.
 
 ### Authentification Stick ↔ service
 

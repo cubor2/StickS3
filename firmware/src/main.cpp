@@ -585,7 +585,9 @@ void loop() {
       // millis() et non `now` : stateSince peut être postérieur à la lecture
       // de now en haut de boucle (l'état vient d'être créé). Un `now` plus
       // ancien ferait déborder le calcul en négatif et expirer l'état juste.
-      if (millis() - stateSince > 45000) {
+      // 90 s : aligné sur la patience du service (120 s API). Trop court,
+      // le stick criait « pas de reponse » puis le collé tardif survenait.
+      if (millis() - stateSince > 90000) {
         ui::error("pas de reponse");
         sfxError();
         go(ST_TRANSIENT);
