@@ -42,6 +42,16 @@ OpenCode == HTTP localhost:8788 ==> service Windows == notification TCP ==> Stic
 Le service n'accepte volontairement qu'une commande clavier fixe (`Entrée`),
 sans payload, plutôt qu'un relais de touches arbitraires.
 
+### Changer de PC en un double-clic
+
+Plusieurs PC peuvent faire tourner le service en même temps. Pour attacher le
+Stick au PC **où tu te trouves**, double-clique `service\Prendre-Stick.cmd` :
+il diffuse une réclamation UDP que le Stick entend même s'il est connecté à
+une autre machine, et il bascule en quelques secondes. Astuce : épingler ce
+fichier à la barre des tâches. Au démarrage du Stick, si plusieurs services
+répondent en même temps, il prend le premier — un double-clic sur
+`Prendre-Stick.cmd` tranche.
+
 ## 1. Service PC (à lancer en premier)
 
 ### Installation simple sur un PC Windows
@@ -162,8 +172,9 @@ visuels locaux (VU-mètre, spinner, ondes pour `Entrée`).
 
 ## Points d'attention pour reprendre le projet
 
-- **Une seule instance du service par réseau** : deux PC actifs répondraient
-  tous deux à la découverte UDP, donc le Stick pourrait choisir l'un ou l'autre.
+- **Plusieurs services peuvent cohabiter** : le Stick suit le premier qui
+  répond à la découverte ; `Prendre-Stick.cmd` sur le PC voulu tranche
+  instantanément.
 - **Pare-feu Windows** : autoriser Python sur les réseaux privés lors du
   premier lancement, sinon la découverte et le TCP seront bloqués.
 - **Focus Windows** : le collage et `Entrée` visent toujours la fenêtre active.

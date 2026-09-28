@@ -26,6 +26,9 @@ static uint16_t servicePort = SERVICE_PORT;
 
 static const char* DISCOVERY_REQUEST = "STICKS3_DISCOVER_V1";
 static const char* DISCOVERY_RESPONSE = "STICKS3_HERE_V1 ";
+// Un PC peut réclamer le Stick même s'il est connecté ailleurs : broadcast
+// UDP entendu sur la même socket que la découverte, sans tour de main TCP.
+static const char* DISCOVERY_CLAIM = "STICKS3_CLAIM_V1 ";
 
 // Le PC répond au broadcast UDP avec son IP et le port TCP du service.
 // Cela évite d'encoder une IP locale dans le firmware.
@@ -44,7 +47,25 @@ static void discoveryTick(uint32_t now) {
     int n = discovery.read(response, min(packetSize, (int)sizeof(response) - 1));
     response[max(0, n)] = 0;
     unsigned int port = 0;
-    if (strncmp(response, DISCOVERY_RESPONSE, strlen(DISCOVERY_RESPONSE)) == 0 &&
+    if (strncmp(response, DISCOVERY_CLAIM, strlen(DISCOVERY_CLAIM)) == 0 &&
+        sscanf(response + strlen(DISCOVERY_CLAIM), "%u", &port) == 1 &&
+        port > 0 && port <= 65535) {
+      IPAddress claimer = discovery.remoteIP();
+      // Déjà attaché à ce PC : ne pas couper la connexion pour rien.
+      if (!(claimer == serviceIp) || !client.connected()) {
+        serviceIp = claimer;
+        servicePort = (uint16_t)port;
+        serviceKnown = true;
+        if (client.connected()) {
+          client.stop();
+          wasConnected = false;
+        }
+        if (Serial) {
+          Serial.printf("[discovery] claim : %s:%u\n",
+                        claimer.toString().c_str(), servicePort);
+        }
+      }
+    } else if (strncmp(response, DISCOVERY_RESPONSE, strlen(DISCOVERY_RESPONSE)) == 0 &&
         sscanf(response + strlen(DISCOVERY_RESPONSE), "%u", &port) == 1 &&
         port > 0 && port <= 65535) {
       serviceIp = discovery.remoteIP();
