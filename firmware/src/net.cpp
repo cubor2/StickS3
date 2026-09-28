@@ -59,7 +59,7 @@ static bool parseResponse(const char* rest, unsigned int* port,
   char flag[8] = {0};
   int fields = sscanf(rest, "%u %19s %7s", port, tmp, flag);
   if (fields < 1 || *port == 0 || *port > 65535) return false;
-  if (fields == 2) snprintf(parsedName, cap, "%s", tmp);
+  if (fields >= 2) snprintf(parsedName, cap, "%s", tmp);
   else if (cap) parsedName[0] = 0;
   *claimFlag = (fields >= 3 && strncmp(flag, "CLAIM", 5) == 0);
   return true;
