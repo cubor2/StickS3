@@ -7,6 +7,7 @@
 //   0x03 NOTIFY      svc→stick   titre \t message \t son (frites|ok|error)
 //   0x04 TRANSCRIPT  svc→stick   statut \t message \t extrait (statut: ok|error)
 //   0x05 ENTER       stick→svc   appui Entrée fixe dans la fenêtre active
+//   0x06 PING        stick→svc   keepalive applicatif (payload vide, sans réponse)
 // Découverte UDP : requête "STICKS3_DISCOVER_V1" en broadcast, réponse
 // "STICKS3_HERE_V1 <port_tcp> <nom_pc>" ; réclamation "STICKS3_CLAIM_V1
 // <port_tcp> <nom_pc>" pour attacher le Stick à un PC précis.

@@ -48,12 +48,16 @@ static void sanitizeName(const char* src, char* dst, size_t cap) {
   dst[n] = 0;
 }
 
-// "PORT [NOM]" : le nom est optionnel (compat ancien service).
-static bool parseResponse(const char* rest, unsigned int* port) {
+// "PORT [NOM]" : le nom est optionnel (compat ancien service). Le nom est
+// rendu a l'appelant, qui l'adopte SEULEMENT s'il accepte la reponse — un
+// effet de bord ici ferait osciller le nom affiche (bug vecu, 2026-09-28).
+static bool parseResponse(const char* rest, unsigned int* port,
+                          char* parsedName, size_t cap) {
   char tmp[20] = {0};
   int fields = sscanf(rest, "%u %19s", port, tmp);
   if (fields < 1 || *port == 0 || *port > 65535) return false;
-  if (fields == 2) sanitizeName(tmp, svcName, sizeof(svcName));
+  if (fields == 2) snprintf(parsedName, cap, "%s", tmp);
+  else if (cap) parsedName[0] = 0;
   return true;
 }
 
@@ -74,8 +78,10 @@ static void discoveryTick(uint32_t now) {
     int n = discovery.read(response, min(packetSize, (int)sizeof(response) - 1));
     response[max(0, n)] = 0;
     unsigned int port = 0;
+    char parsedName[20] = {0};
     if (strncmp(response, DISCOVERY_CLAIM, strlen(DISCOVERY_CLAIM)) == 0 &&
-        parseResponse(response + strlen(DISCOVERY_CLAIM), &port)) {
+        parseResponse(response + strlen(DISCOVERY_CLAIM), &port,
+                      parsedName, sizeof(parsedName))) {
       IPAddress claimer = discovery.remoteIP();
       // Déjà attaché à ce PC : ne pas couper la connexion pour rien.
       if (!(claimer == serviceIp) || !client.connected()) {
@@ -85,6 +91,7 @@ static void discoveryTick(uint32_t now) {
         // Le claim est prioritaire : la découverte se tait tant que cette
         // cible n'a pas échoué, sinon une réponse concurrente l'annule.
         connectFailed = false;
+        if (parsedName[0]) sanitizeName(parsedName, svcName, sizeof(svcName));
         if (client.connected()) {
           client.stop();
           wasConnected = false;
@@ -95,7 +102,8 @@ static void discoveryTick(uint32_t now) {
         }
       }
     } else if (strncmp(response, DISCOVERY_RESPONSE, strlen(DISCOVERY_RESPONSE)) == 0 &&
-        parseResponse(response + strlen(DISCOVERY_RESPONSE), &port)) {
+        parseResponse(response + strlen(DISCOVERY_RESPONSE), &port,
+                      parsedName, sizeof(parsedName))) {
       // Stick attaché ou cible fiable : la découverte ne déplace pas la cible.
       // Deux services répondent en permanence — les suivre ferait osciller le
       // nom à l'écran, annulerait un claim fraîchement reçu (course avec la
@@ -107,6 +115,7 @@ static void discoveryTick(uint32_t now) {
         servicePort = (uint16_t)port;
         serviceKnown = true;
         connectFailed = false;
+        if (parsedName[0]) sanitizeName(parsedName, svcName, sizeof(svcName));
         if (Serial) {
           Serial.printf("[discovery] service : %s:%u\n",
                         serviceIp.toString().c_str(), servicePort);
@@ -305,9 +314,10 @@ void loop() {
     lastHb = millis();
     if (Serial) {
       if (wifiUp()) {
-        Serial.printf("[hb] wifi OK ip=%s rssi=%d tcp=%d\n",
+        Serial.printf("[hb] wifi OK ip=%s rssi=%d tcp=%d svc=%s:%u name=%s\n",
                       WiFi.localIP().toString().c_str(),
-                      (int)WiFi.RSSI(), client.connected() ? 1 : 0);
+                      (int)WiFi.RSSI(), client.connected() ? 1 : 0,
+                      serviceIp.toString().c_str(), servicePort, svcName);
       } else {
         Serial.printf("[hb] wifi KO status=%d rssi=%d\n",
                       (int)WiFi.status(), (int)WiFi.RSSI());
@@ -359,6 +369,15 @@ void loop() {
 
   wasConnected = true;
   pumpInbound();
+
+  // Ping applicatif toutes les 10 s : si le pair est mort sans RST reçu
+  // (extinction sauvage, process tué), la retransmission déclenche un RST
+  // du peer en quelques secondes au lieu d'un TCP zombie éternel.
+  static uint32_t lastPing = 0;
+  if (now - lastPing >= 10000) {
+    lastPing = now;
+    sendFrame(0x06, nullptr, 0);
+  }
 }
 
 }  // namespace net

@@ -36,6 +36,7 @@ MSG_WAV = 0x02
 MSG_NOTIFY = 0x03
 MSG_TRANSCRIPT = 0x04
 MSG_ENTER = 0x05
+MSG_PING = 0x06
 
 MAX_WAV = 8 * 1024 * 1024  # 8 Mo : large pour 60 s de 16 kHz mono
 DISCOVERY_REQUEST = b"STICKS3_DISCOVER_V1"
@@ -245,6 +246,8 @@ def handle_stick(sock: socket.socket, addr) -> None:
             typ, payload = read_frame(sock)
             if typ == MSG_WAV:
                 handle_wav(sock, payload, name)
+            elif typ == MSG_PING:
+                pass  # keepalive applicatif : le stick vérifie que le TCP vit
             elif typ == MSG_ENTER:
                 # Commande fixe, sans payload : le Stick ne peut pas devenir
                 # un relais de frappes arbitraires sur le réseau.
