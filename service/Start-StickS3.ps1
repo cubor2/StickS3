@@ -62,7 +62,11 @@ if ($InstallStartup) {
     $Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -Background"
     $Action = New-ScheduledTaskAction -Execute $PowerShell -Argument $Arguments
     $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Description 'Lance le service de dictee StickS3 a l ouverture de session.' -Force | Out-Null
+    # Pas de limite de duree, demarrage et maintien autorises sur batterie :
+    # un portable ne doit pas perdre le service parce qu'il est debranche.
+    $Settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Description 'Lance le service de dictee StickS3 a l ouverture de session.' -Force | Out-Null
     Write-Host 'Demarrage automatique ajoute pour ce compte Windows.' -ForegroundColor Green
 }
 
@@ -81,10 +85,17 @@ try {
 
 if ($Background) {
     # Tache planifiee / fenetre cachee : jamais d'attente clavier ici.
+    # Superviseur : une mort silencieuse du service (defaillance systeme,
+    # OOM, mise a jour) est reparee dans les 5 s. Chaque redemarrage se
+    # voit dans le log via la banniere "=== service StickS3 ===".
     $LogDir = Join-Path $env:LOCALAPPDATA 'StickS3'
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-    & $Python.Source $ServiceScript *>> (Join-Path $LogDir 'service.log')
-    exit $LASTEXITCODE
+    $LogFile = Join-Path $LogDir 'service.log'
+    while ($true) {
+        & $Python.Source $ServiceScript *>> $LogFile
+        Add-Content -Path $LogFile -Value ("[{0}] superviseur : service relance apres arret" -f (Get-Date -Format 'HH:mm:ss')) -Encoding Unicode
+        Start-Sleep -Seconds 5
+    }
 }
 
 Write-Host 'Service StickS3 lance - laisse cette fenetre ouverte (Ctrl+C pour arreter).' -ForegroundColor Cyan
