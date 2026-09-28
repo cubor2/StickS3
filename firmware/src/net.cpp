@@ -48,16 +48,20 @@ static void sanitizeName(const char* src, char* dst, size_t cap) {
   dst[n] = 0;
 }
 
-// "PORT [NOM]" : le nom est optionnel (compat ancien service). Le nom est
-// rendu a l'appelant, qui l'adopte SEULEMENT s'il accepte la reponse — un
-// effet de bord ici ferait osciller le nom affiche (bug vecu, 2026-09-28).
+// "PORT [NOM] [CLAIM]" : nom optionnel (compat ancien service), CLAIM
+// optionnel = le PC demandé réclame le stick via sa sonde de découverte.
+// Le nom et le drapeau sont rendus à l'appelant, qui les adopte SEULEMENT
+// s'il accepte la réponse — un effet de bord ici ferait osciller le nom
+// affiché (bug vécu, 2026-09-28).
 static bool parseResponse(const char* rest, unsigned int* port,
-                          char* parsedName, size_t cap) {
+                          char* parsedName, size_t cap, bool* claimFlag) {
   char tmp[20] = {0};
-  int fields = sscanf(rest, "%u %19s", port, tmp);
+  char flag[8] = {0};
+  int fields = sscanf(rest, "%u %19s %7s", port, tmp, flag);
   if (fields < 1 || *port == 0 || *port > 65535) return false;
   if (fields == 2) snprintf(parsedName, cap, "%s", tmp);
   else if (cap) parsedName[0] = 0;
+  *claimFlag = (fields >= 3 && strncmp(flag, "CLAIM", 5) == 0);
   return true;
 }
 
@@ -79,17 +83,51 @@ static void discoveryTick(uint32_t now) {
     response[max(0, n)] = 0;
     unsigned int port = 0;
     char parsedName[20] = {0};
-    if (strncmp(response, DISCOVERY_CLAIM, strlen(DISCOVERY_CLAIM)) == 0 &&
-        parseResponse(response + strlen(DISCOVERY_CLAIM), &port,
-                      parsedName, sizeof(parsedName))) {
-      IPAddress claimer = discovery.remoteIP();
+    bool claimFlag = false;
+    bool isClaim = false;
+    bool isHere = false;
+    if (strncmp(response, DISCOVERY_CLAIM, strlen(DISCOVERY_CLAIM)) == 0) {
+      isClaim = parseResponse(response + strlen(DISCOVERY_CLAIM), &port,
+                              parsedName, sizeof(parsedName), &claimFlag);
+    } else if (strncmp(response, DISCOVERY_RESPONSE,
+                       strlen(DISCOVERY_RESPONSE)) == 0) {
+      isHere = parseResponse(response + strlen(DISCOVERY_RESPONSE), &port,
+                             parsedName, sizeof(parsedName), &claimFlag);
+    }
+
+    if (isClaim || isHere) {
+      IPAddress from = discovery.remoteIP();
+      // Une candidature doit venir du même sous-réseau que le stick : les
+      // adaptateurs virtuels/APIPA des PC émettent aussi des broadcasts et
+      // leur adresse source est injoignable pour lui.
+      IPAddress localIp = WiFi.localIP();
+      IPAddress netMask = WiFi.subnetMask();
+      bool sameSubnet = true;
+      for (int i = 0; i < 4; ++i) {
+        if ((localIp[i] & netMask[i]) != (from[i] & netMask[i])) {
+          sameSubnet = false;
+          break;
+        }
+      }
+
+      // Quand basculer :
+      //  - réponse marquée CLAIM : le PC demandé a répondu à la sonde du
+      //    stick LUI-MÊME (unicast, fiable même à travers les ponts de
+      //    bandes Wi-Fi qui avalent les broadcasts) ;
+      //  - trame CLAIM broadcastée (ancien chemin, conservé) ;
+      //  - stick détaché et cible inconnue ou défaillante.
       // Déjà attaché à ce PC : ne pas couper la connexion pour rien.
-      if (!(claimer == serviceIp) || !client.connected()) {
-        serviceIp = claimer;
+      bool alreadyHere = (from == serviceIp) && client.connected();
+      bool shouldSwitch =
+          !alreadyHere && (isClaim || claimFlag ||
+                           (!client.connected() &&
+                            (!serviceKnown || connectFailed)));
+      if (sameSubnet && shouldSwitch) {
+        serviceIp = from;
         servicePort = (uint16_t)port;
         serviceKnown = true;
-        // Le claim est prioritaire : la découverte se tait tant que cette
-        // cible n'a pas échoué, sinon une réponse concurrente l'annule.
+        // La cible adoptée est intouchable tant qu'elle ne déçoit pas : une
+        // réponse concurrente ne doit pas annuler un claim fraîchement reçu.
         connectFailed = false;
         if (parsedName[0]) sanitizeName(parsedName, svcName, sizeof(svcName));
         if (client.connected()) {
@@ -97,28 +135,9 @@ static void discoveryTick(uint32_t now) {
           wasConnected = false;
         }
         if (Serial) {
-          Serial.printf("[discovery] claim : %s:%u\n",
-                        claimer.toString().c_str(), servicePort);
-        }
-      }
-    } else if (strncmp(response, DISCOVERY_RESPONSE, strlen(DISCOVERY_RESPONSE)) == 0 &&
-        parseResponse(response + strlen(DISCOVERY_RESPONSE), &port,
-                      parsedName, sizeof(parsedName))) {
-      // Stick attaché ou cible fiable : la découverte ne déplace pas la cible.
-      // Deux services répondent en permanence — les suivre ferait osciller le
-      // nom à l'écran, annulerait un claim fraîchement reçu (course avec la
-      // fenêtre de reconnexion) et rattacherait au premier venu après un drop.
-      // Elle reprend la main seulement si la cible actuelle a échoué : chaque
-      // candidate obtient une tentative honnête, pas plus.
-      if (!client.connected() && (!serviceKnown || connectFailed)) {
-        serviceIp = discovery.remoteIP();
-        servicePort = (uint16_t)port;
-        serviceKnown = true;
-        connectFailed = false;
-        if (parsedName[0]) sanitizeName(parsedName, svcName, sizeof(svcName));
-        if (Serial) {
-          Serial.printf("[discovery] service : %s:%u\n",
-                        serviceIp.toString().c_str(), servicePort);
+          Serial.printf("[discovery] %s : %s:%u\n",
+                        (isClaim || claimFlag) ? "claim" : "service",
+                        from.toString().c_str(), servicePort);
         }
       }
     }

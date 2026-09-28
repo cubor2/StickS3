@@ -41,6 +41,8 @@ MSG_PING = 0x06
 MAX_WAV = 8 * 1024 * 1024  # 8 Mo : large pour 60 s de 16 kHz mono
 DISCOVERY_REQUEST = b"STICKS3_DISCOVER_V1"
 DISCOVERY_RESPONSE = b"STICKS3_HERE_V1"
+CLAIM_WINDOW = 15.0  # secondes durant lesquelles ce PC réclame le stick
+CLAIM_UNTIL = [0.0]  # time.time() jusqu'auquel la réponse porte "CLAIM"
 
 # Nom affiché par le Stick : lettres, chiffres et tirets uniquement.
 PC_NAME = re.sub(r"[^A-Za-z0-9-]", "", socket.gethostname())[:16] or "PC"
@@ -310,8 +312,12 @@ def discovery_server(port: int, tcp_port: int) -> None:
                 continue
             if payload == DISCOVERY_REQUEST:
                 # Le nom du PC permet au Stick d'afficher à qui il parle.
+                # CLAIM : ce PC vient de recevoir une demande locale — la
+                # réponse (unicast, fiable à travers les ponts de bandes)
+                # porte le drapeau qui fait basculer le Stick.
+                extra = " CLAIM" if time.time() < CLAIM_UNTIL[0] else ""
                 srv.sendto(
-                    f"{DISCOVERY_RESPONSE.decode()} {tcp_port} {PC_NAME}".encode(),
+                    f"{DISCOVERY_RESPONSE.decode()} {tcp_port} {PC_NAME}{extra}".encode(),
                     addr,
                 )
     finally:
@@ -337,6 +343,13 @@ class NotifyHandler(BaseHTTPRequestHandler):
             self._json(404, {"error": "inconnu"})
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/claim":
+            # Demande locale (Prendre-Stick.cmd) : marquer les prochaines
+            # réponses de découverte d'un CLAIM pendant la fenêtre.
+            CLAIM_UNTIL[0] = time.time() + CLAIM_WINDOW
+            self._json(200, {"ok": True, "claim_seconds": CLAIM_WINDOW})
+            log("demande de claim locale acceptée (15 s)")
+            return
         if self.path not in ("/notify", "/test"):
             self._json(404, {"error": "inconnu"})
             return

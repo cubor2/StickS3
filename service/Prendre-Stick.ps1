@@ -1,8 +1,9 @@
 # ------------------------------------------------------------
 # Prendre-Stick.ps1 - appelle le Stick vers CE PC.
-# Envoie la reclamation UDP depuis chaque interface reelle, vers le
-# broadcast de sous-reseau ET le broadcast limite, plusieurs fois :
-# les adaptateurs virtuels et certains boxes filtrent selon le cas.
+# Chemin principal : le service local marque ses réponses de découverte
+# d'un CLAIM — le stick l'entend via sa propre sonde (unicast, fiable
+# même à travers les ponts de bandes Wi-Fi qui avalent les broadcasts).
+# Repli : broadcast UDP direct depuis chaque interface réelle.
 # ------------------------------------------------------------
 $ErrorActionPreference = 'Stop'
 
@@ -15,7 +16,17 @@ if (Test-Path -LiteralPath $CfgPath) {
     } catch { }
 }
 
-# Nom du PC inclus dans la reclamation : le Stick sait a qui il parle.
+# 1) Si le service local tourne, passons par lui : fiable et simple.
+try {
+    $r = Invoke-WebRequest -UseBasicParsing -Method POST -Uri 'http://127.0.0.1:8788/claim' -TimeoutSec 2
+    if ($r.StatusCode -eq 200) {
+        Write-Host 'Demande transmise au service local : le stick bascule ici sous quelques secondes.'
+        exit 0
+    }
+} catch { }
+
+# 2) Service local absent : broadcast UDP direct depuis chaque interface
+#    reelle, vers le broadcast de sous-reseau ET le broadcast limite.
 $PcName = [regex]::Replace($env:COMPUTERNAME, '[^A-Za-z0-9-]', '')
 if ($PcName.Length -gt 16) { $PcName = $PcName.Substring(0, 16) }
 $Payload = [Text.Encoding]::ASCII.GetBytes(('STICKS3_CLAIM_V1 {0} {1}' -f $TcpPort, $PcName))
@@ -32,6 +43,8 @@ foreach ($If in $Ifaces) {
         Where-Object { $_.Address.AddressFamily -eq 'InterNetwork' -and $_.IPv4Mask }
     foreach ($Ua in $Unicast) {
         $IpBytes = $Ua.Address.GetAddressBytes()
+        # APIPA (169.254.x.x) : adaptateur sans reseau reel, inutile d'emettre
+        if ($IpBytes[0] -eq 169 -and $IpBytes[1] -eq 254) { continue }
         $MaskBytes = $Ua.IPv4Mask.GetAddressBytes()
         $BcBytes = [byte[]]::new(4)
         for ($i = 0; $i -lt 4; $i++) {
