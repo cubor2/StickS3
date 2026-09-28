@@ -24,6 +24,7 @@ static uint32_t lastDiscoveryTry = 0;
 static bool wasConnected = false;
 static bool discoveryStarted = false;
 static bool serviceKnown = false;
+static bool connectFailed = false;  // la dernière tentative vers la cible a échoué
 static IPAddress serviceIp;
 static uint16_t servicePort = SERVICE_PORT;
 
@@ -81,6 +82,9 @@ static void discoveryTick(uint32_t now) {
         serviceIp = claimer;
         servicePort = (uint16_t)port;
         serviceKnown = true;
+        // Le claim est prioritaire : la découverte se tait tant que cette
+        // cible n'a pas échoué, sinon une réponse concurrente l'annule.
+        connectFailed = false;
         if (client.connected()) {
           client.stop();
           wasConnected = false;
@@ -92,14 +96,17 @@ static void discoveryTick(uint32_t now) {
       }
     } else if (strncmp(response, DISCOVERY_RESPONSE, strlen(DISCOVERY_RESPONSE)) == 0 &&
         parseResponse(response + strlen(DISCOVERY_RESPONSE), &port)) {
-      // Stick attaché : la découverte ne déplace pas la cible. Avec deux
-      // services actifs, les réponses alternent — les suivre ferait osciller
-      // le nom à l'écran et rattacher au premier venu après un drop. Seule
-      // une réclamation peut changer d'avis ; un PC disparu rouvre la porte.
-      if (!client.connected()) {
+      // Stick attaché ou cible fiable : la découverte ne déplace pas la cible.
+      // Deux services répondent en permanence — les suivre ferait osciller le
+      // nom à l'écran, annulerait un claim fraîchement reçu (course avec la
+      // fenêtre de reconnexion) et rattacherait au premier venu après un drop.
+      // Elle reprend la main seulement si la cible actuelle a échoué : chaque
+      // candidate obtient une tentative honnête, pas plus.
+      if (!client.connected() && (!serviceKnown || connectFailed)) {
         serviceIp = discovery.remoteIP();
         servicePort = (uint16_t)port;
         serviceKnown = true;
+        connectFailed = false;
         if (Serial) {
           Serial.printf("[discovery] service : %s:%u\n",
                         serviceIp.toString().c_str(), servicePort);
@@ -335,6 +342,7 @@ void loop() {
       // reconnexion vers un PC/service absent ne doit jamais la geler.
       // L'overload ESP32 permet une borne stricte en millisecondes.
       bool ok = client.connect(serviceIp, servicePort, 50);
+      connectFailed = !ok;
       if (Serial) {
         Serial.printf("[tcp] connect %s:%u -> %s\n",
                       serviceIp.toString().c_str(), servicePort,
