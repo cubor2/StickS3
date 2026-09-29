@@ -61,22 +61,28 @@ if ($InstallStartup) {
     $PowerShell = (Get-Command powershell.exe).Source
     $Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -Background"
     $Action = New-ScheduledTaskAction -Execute $PowerShell -Argument $Arguments
-    # Declencheur : a l'ouverture de session, REPETE toutes les 5 minutes.
-    # Une instance morte (console fermee par le systeme en pleine nuit, etc.)
-    # est relancee par le planificateur lui-meme en 5 min max ; s'il vit
-    # deja, le demarrage est ignore (IgnoreNew).
-    $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $Rep = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+    # Deux declencheurs separes : logon (demarrage instantane a la session)
+    # et une repetition toutes les 5 minutes INDEPENDANTE de la session —
+    # les repetitions attachees a un declencheur logon ne rattrapent pas une
+    # instance morte au milieu de la nuit sans nouvel evenement de logon
+    # (verifie en conditions reelles, 2026-09-30). IgnoreNew evite les
+    # doublons quand l'instance vit deja.
+    $TriggerLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $TriggerWatchdog = New-ScheduledTaskTrigger -Once -At (Get-Date) `
         -RepetitionInterval (New-TimeSpan -Minutes 5) `
         -RepetitionDuration ([TimeSpan]::FromDays(3650))
-    $Trigger.Repetition = $Rep.Repetition
     # Pas de limite de duree, batterie autorisee, redemarrage sur echec :
     # trois couches au-dessus du superviseur interne du lanceur.
     $Settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 1) `
         -StartWhenAvailable
-    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Description 'Lance le service de dictee StickS3 a l ouverture de session.' -Force | Out-Null
+    Register-ScheduledTask -TaskName $TaskName -Action $Action `
+        -Trigger @($TriggerLogon, $TriggerWatchdog) -Settings $Settings `
+        -Description 'Lance le service de dictee StickS3 a l ouverture de session.' -Force | Out-Null
+    # Historique du planificateur : la prochaine mort mysterieuse laissera
+    # une empreinte. Best effort : refuse sans elevation, pas grave.
+    try { wevtutil set-log Microsoft-Windows-TaskScheduler/Operational /enabled:true 2>$null } catch { }
     Write-Host 'Demarrage automatique ajoute pour ce compte Windows.' -ForegroundColor Green
 }
 
