@@ -383,6 +383,20 @@ def http_server(host: str, port: int) -> None:
 
 # ------------------------------------------------------------
 def main() -> None:
+    # Garde anti-collision : le watchdog relance la tâche toutes les 5 min ;
+    # si une instance vit déjà (et répond), la nouvelle sort proprement au
+    # lieu de se battre pour les ports et cracher des erreurs toutes les
+    # 5 minutes.
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8788/health", timeout=1) as r:
+            if r.status == 200:
+                log("instance déjà active détectée, sortie propre")
+                return
+    except OSError:
+        pass
+
     log("=== service StickS3 ===")
     log(f"config : {CONFIG_PATH if CONFIG_PATH.exists() else 'config.example.json (défaut)'}")
 
@@ -427,4 +441,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Traçage de fin de vie : le service est mort silencieusement à plusieurs
+    # reprises après l'extinction auto du stick. Ce trace dira si c'est une
+    # exception, une sortie propre, ou un kill externe (rien n'apparaît).
+    try:
+        main()
+    except BaseException as exc:  # noqa: BLE001 — le but est justement de tout voir
+        log(f"FIN DE VIE ANORMALE : {type(exc).__name__}: {exc}")
+        raise
+    finally:
+        log("process terminé")

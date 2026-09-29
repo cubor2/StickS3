@@ -101,16 +101,28 @@ try {
 
 if ($Background) {
     # Tache planifiee / fenetre cachee : jamais d'attente clavier ici.
-    # Superviseur : une mort silencieuse du service (defaillance systeme,
-    # OOM, mise a jour) est reparee dans les 5 s. Chaque redemarrage se
-    # voit dans le log via la banniere "=== service StickS3 ===".
+    # pythonw : executable SANS console — les evenements de fermeture de
+    # console (0xC000013A, trois morts verifiees) ne peuvent plus l'atteindre.
+    # Le powershell superviseur peut mourir, le service survit, et le
+    # watchdog du planificateur relance la surveillance. Le garde
+    # anti-collision du service fait echouer proprement un doublon.
     $LogDir = Join-Path $env:LOCALAPPDATA 'StickS3'
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
     $LogFile = Join-Path $LogDir 'service.log'
+    # py.exe est un LAUNCHER : il faut resoudre le vrai interpretable pour
+    # trouver pythonw.exe a cote (le -replace sur py.exe ne matche rien).
+    $RealPython = (& $Python.Source -c "import sys; print(sys.executable)").Trim()
+    $PythonW = $RealPython -replace 'python\.exe$', 'pythonw.exe'
+    if (-not (Test-Path $PythonW)) { $PythonW = $RealPython }
     while ($true) {
-        & $Python.Source $ServiceScript *>> $LogFile
-        Add-Content -Path $LogFile -Value ("[{0}] superviseur : service relance apres arret" -f (Get-Date -Format 'HH:mm:ss')) -Encoding Unicode
-        Start-Sleep -Seconds 5
+        $Sw = [Diagnostics.Stopwatch]::StartNew()
+        & $PythonW $ServiceScript *>> $LogFile
+        $Sw.Stop()
+        Add-Content -Path $LogFile -Value ("[{0}] superviseur : service relance apres arret (duree {1:n0} s)" -f (Get-Date -Format 'HH:mm:ss'), $Sw.Elapsed.TotalSeconds) -Encoding Unicode
+        # Sortie quasi immediate = instance deja active ailleurs (garde
+        # anti-collision du service) : attendre 60 s au lieu de marteler.
+        if ($Sw.Elapsed.TotalSeconds -lt 10) { Start-Sleep -Seconds 60 }
+        else { Start-Sleep -Seconds 5 }
     }
 }
 
