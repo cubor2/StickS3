@@ -118,9 +118,20 @@ if ($Background) {
         $Sw = [Diagnostics.Stopwatch]::StartNew()
         & $PythonW $ServiceScript *>> $LogFile
         $Sw.Stop()
+        # Sortie quasi immediate = une autre instance vit deja (garde
+        # anti-collision) : pas la peine de relancer ni de logguer en boucle,
+        # le chien de garde du planificateur repassera de toute facon.
+        try {
+            $H = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8788/health' -TimeoutSec 1
+            if ($H.StatusCode -eq 200) {
+                # Une instance saine tourne : ce superviseur se retire du
+                # terrain (sortie 0). Le watchdog repassera si elle meurt.
+                exit 0
+            }
+        } catch { }
         Add-Content -Path $LogFile -Value ("[{0}] superviseur : service relance apres arret (duree {1:n0} s)" -f (Get-Date -Format 'HH:mm:ss'), $Sw.Elapsed.TotalSeconds) -Encoding Unicode
-        # Sortie quasi immediate = instance deja active ailleurs (garde
-        # anti-collision du service) : attendre 60 s au lieu de marteler.
+        # Sortie quasi immediate et service absent : vraie defaillance en
+        # boucle, attendre 60 s au lieu de marteler.
         if ($Sw.Elapsed.TotalSeconds -lt 10) { Start-Sleep -Seconds 60 }
         else { Start-Sleep -Seconds 5 }
     }
