@@ -34,9 +34,9 @@ enum State : uint8_t {
 };
 static State state = ST_WIFI;
 static uint32_t stateSince = 0;
-static constexpr uint32_t DIM_AFTER_MS = 90UL * 1000UL;
-static constexpr uint32_t SCREEN_SLEEP_AFTER_MS = 3UL * 60UL * 1000UL;
-static constexpr uint32_t POWER_OFF_AFTER_MS = 5UL * 60UL * 1000UL;
+static constexpr uint32_t DIM_AFTER_MS = 180UL * 1000UL;
+static constexpr uint32_t SCREEN_SLEEP_AFTER_MS = 6UL * 60UL * 1000UL;
+static constexpr uint32_t POWER_OFF_AFTER_MS = 10UL * 60UL * 1000UL;
 // IMU : au-delà de ce delta (en G, somme des axes), le stick est considéré
 // porté et la veille est repoussée. La présence de l'IMU est vérifiée à
 // l'exécution — le code reste inerte sur un stick sans accéléromètre.
