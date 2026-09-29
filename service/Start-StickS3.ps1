@@ -58,9 +58,11 @@ if (-not $ApiKey) {
 $env:STT_API_KEY = $ApiKey
 
 if ($InstallStartup) {
-    $PowerShell = (Get-Command powershell.exe).Source
-    $Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -Background"
-    $Action = New-ScheduledTaskAction -Execute $PowerShell -Argument $Arguments
+    # L'action passe par un .vbs : wscript n'a pas de console, donc aucun
+    # flash de fenetre PowerShell a chaque tir du chien de garde.
+    $WScript = (Get-Command wscript.exe).Source
+    $Vbs = Join-Path $PSScriptRoot 'Lancer-Fond.vbs'
+    $Action = New-ScheduledTaskAction -Execute $WScript -Argument "`"$Vbs`""
     # Deux declencheurs separes : logon (demarrage instantane a la session)
     # et une repetition toutes les 5 minutes INDEPENDANTE de la session —
     # les repetitions attachees a un declencheur logon ne rattrapent pas une

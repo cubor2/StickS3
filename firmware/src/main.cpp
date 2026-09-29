@@ -268,7 +268,10 @@ static void stopRecording(bool cancel) {
   uint32_t dataBytes = (uint32_t)(pcmLen * 2);
   buildWavHeader(hdr, dataBytes);
 
-  if (!net::sendWav(hdr, pcmBuf, dataBytes)) {
+  // Envoi DÉLÉGUÉ à la tâche réseau : la boucle UI reste vivante pendant
+  // l'upload (la roue tourne, les boutons répondent), quel que soit l'état
+  // du lien Wi-Fi. Le résultat revient par la file (0xFD).
+  if (!net::requestSend(hdr, pcmBuf, dataBytes)) {
     ui::error("envoi rate");
     sfxError();
     go(ST_TRANSIENT);
@@ -402,6 +405,21 @@ static void handleNet() {
         sfxError();
       }
       go(ST_TRANSIENT);
+
+    } else if (type == 0xFD) {  // interne : résultat d'envoi WAV (tâche réseau)
+      // L'upload s'est terminé pendant qu'on patiente : soit le service est
+      // en train de transcrire (le chrono de patience repart pour 90 s),
+      // soit l'envoi a échoué et on l'affiche sans attendre un transcript
+      // qui ne viendra jamais.
+      if (state == ST_WAITING) {
+        if (strcmp(buf, "ok") == 0) {
+          stateSince = millis();
+        } else {
+          ui::error("envoi rate");
+          sfxError();
+          go(ST_TRANSIENT);
+        }
+      }
     }
   }
 }
@@ -495,12 +513,14 @@ void loop() {
       ui::setDimmed(false);
     }
   }
-  net::loop();
+  // Le réseau vit désormais dans sa propre tâche (net.cpp) : plus rien de
+  // bloquant ici, quel que soit l'état du lien Wi-Fi.
   handleNet();
 
   // Bouton droit : Entrée fixe dans la fenêtre PC, sauf pendant une prise
-  // (annulation) ou le réglage volume (B change le cran).
-  if (bClicked && state != ST_RECORDING && state != ST_VOLUME && net::sendEnter()) {
+  // (annulation) ou le réglage volume (B change le cran). L'envoi est
+  // délégué à la tâche réseau : aucun write bloquant sur le fil UI.
+  if (bClicked && state != ST_RECORDING && state != ST_VOLUME && net::requestEnter()) {
     sfxEnter();
     // Le bip est bloquant : rafraîchir l'horloge avant de créer un état
     // temporisé, sinon ST_ENTER se croit déjà expiré dans ce même tour.
@@ -610,7 +630,9 @@ void loop() {
       // ancien ferait déborder le calcul en négatif et expirer l'état juste.
       // 90 s : aligné sur la patience du service (120 s API). Trop court,
       // le stick criait « pas de reponse » puis le collé tardif survenait.
-      if (millis() - stateSince > 90000) {
+      // Le chrono NE COMPTE PAS pendant l'upload (tâche réseau, lien parfois
+      // lent en roaming) : il ne mesure que l'attente de la transcription.
+      if (!net::sendBusy() && millis() - stateSince > 90000) {
         ui::error("pas de reponse");
         sfxError();
         go(ST_TRANSIENT);

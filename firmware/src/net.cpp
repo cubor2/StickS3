@@ -1,10 +1,21 @@
 // ------------------------------------------------------------
 // net.cpp — client TCP + encadrement de trames.
+//
+// ARCHITECTURE : tout le réseau vit dans une tâche FreeRTOS dédiée
+// (cœur 0, comme la capture micro). La boucle UI (cœur 1) n'appelle plus
+// AUCUNE fonction bloquante : trois morts vérifiées (roue figée, erreur,
+// boutons morts) venaient de write/connect bloquants quand le lien Wi-Fi
+// roam ou agonise. Les demandes d'envoi (WAV, Entrée) passent par des
+// handoffs atomiques ; les résultats remontent par la file d'événements.
 // ------------------------------------------------------------
 #include "net.h"
 #include "config.h"
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <atomic>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 
 // Anciens config.h locaux sans ces réglages : valeurs conventionnelles
 // avec le service PC, pour ne pas imposer de modifier ce fichier.
@@ -17,8 +28,108 @@
 
 namespace net {
 
+// Événement interne (jamais émis sur le réseau) : résultat d'un upload WAV.
+static const uint8_t EV_SEND_RESULT = 0xFD;
+
 static WiFiClient client;
 static WiFiUDP discovery;
+
+// --- état partagé ---------------------------------------------
+// svcUp : écrit par la tâche réseau, lu par l'UI. Jamais d'accès direct
+// au socket depuis deux tâches : la tâche tient ce drapeau à jour.
+static std::atomic<bool> g_svcUp{false};
+
+// Nom du PC auquel on est attaché : écrit par la tâche réseau sous section
+// critique, lu par l'UI.
+static portMUX_TYPE nameMux = portMUX_INITIALIZER_UNLOCKED;
+static char svcName[20] = {0};
+
+static void sanitizeName(const char* src, char* dst, size_t cap) {
+  size_t n = 0;
+  for (; src[n] && n + 1 < cap; ++n) {
+    char c = src[n];
+    bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '-';
+    dst[n] = ok ? c : '-';
+  }
+  dst[n] = 0;
+}
+
+static void commitName(const char* src) {
+  char tmp[20];
+  sanitizeName(src, tmp, sizeof(tmp));
+  portENTER_CRITICAL(&nameMux);
+  memcpy(svcName, tmp, sizeof(svcName));
+  svcName[sizeof(svcName) - 1] = 0;
+  portEXIT_CRITICAL(&nameMux);
+}
+
+// --- file d'événements ----------------------------------------
+// Producteur : tâche réseau. Consommateur : boucle UI.
+struct EventItem {
+  uint8_t type;
+  char buf[384];
+};
+static QueueHandle_t evQueue = nullptr;
+
+static void pushEvent(uint8_t type, const char* p, uint32_t len) {
+  if (!evQueue) return;
+  EventItem it;
+  it.type = type;
+  uint32_t n = min((uint32_t)sizeof(it.buf) - 1, len);
+  memcpy(it.buf, p, n);
+  it.buf[n] = 0;
+  if (xQueueSend(evQueue, &it, 0) != pdTRUE) {
+    // File pleine : on sacrifie le plus ancien pour le plus récent.
+    EventItem drop;
+    if (xQueueReceive(evQueue, &drop, 0) == pdTRUE) {
+      xQueueSend(evQueue, &it, 0);
+    }
+  }
+}
+
+uint8_t pollEvent(char* buf, size_t cap) {
+  if (!evQueue) return 0;
+  EventItem it;
+  if (xQueueReceive(evQueue, &it, 0) != pdTRUE) return 0;
+  snprintf(buf, cap, "%s", it.buf);
+  return it.type;
+}
+
+// --- demandes d'envoi (producteur : UI ; consommateur : tâche réseau) ---
+static struct {
+  uint8_t hdr[44];
+  const int16_t* pcm;
+  size_t bytes;
+} sendReq;
+static std::atomic<bool> sendPending{false};
+static std::atomic<bool> enterPending{false};
+
+bool requestSend(const uint8_t hdr44[44], const int16_t* pcm, size_t pcmBytes) {
+  // Producteur unique (boucle UI) : load + store suffisent. Un envoi déjà
+  // en vol est rejeté — un seul WAV à la fois par construction.
+  if (sendPending.load(std::memory_order_acquire)) return false;
+  memcpy(sendReq.hdr, hdr44, 44);
+  sendReq.pcm = pcm;
+  sendReq.bytes = pcmBytes;
+  sendPending.store(true, std::memory_order_release);
+  return true;
+}
+
+bool requestEnter() {
+  // Commande volontairement sans payload : pas de relais clavier arbitraire.
+  if (!g_svcUp.load(std::memory_order_relaxed)) return false;
+  enterPending.store(true, std::memory_order_release);
+  return true;
+}
+
+bool sendBusy() {
+  // Vrai tant que l'upload du WAV est en vol : le timer de patience de
+  // l'UI ne doit pas compter pendant ce temps.
+  return sendPending.load(std::memory_order_acquire);
+}
+
+// --- état réseau (tâche réseau uniquement) --------------------
 static uint32_t lastConnectTry = 0;
 static uint32_t lastDiscoveryTry = 0;
 static bool wasConnected = false;
@@ -33,20 +144,6 @@ static const char* DISCOVERY_RESPONSE = "STICKS3_HERE_V1 ";
 // Un PC peut réclamer le Stick même s'il est connecté ailleurs : broadcast
 // UDP entendu sur la même socket que la découverte, sans tour de main TCP.
 static const char* DISCOVERY_CLAIM = "STICKS3_CLAIM_V1 ";
-
-// Nom du PC auquel on est attaché (affiché sur l'écran d'accueil).
-static char svcName[20] = {0};
-
-static void sanitizeName(const char* src, char* dst, size_t cap) {
-  size_t n = 0;
-  for (; src[n] && n + 1 < cap; ++n) {
-    char c = src[n];
-    bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-              (c >= '0' && c <= '9') || c == '-';
-    dst[n] = ok ? c : '-';
-  }
-  dst[n] = 0;
-}
 
 // "PORT [NOM] [CLAIM]" : nom optionnel (compat ancien service), CLAIM
 // optionnel = le PC demandé réclame le stick via sa sonde de découverte.
@@ -129,7 +226,7 @@ static void discoveryTick(uint32_t now) {
         // La cible adoptée est intouchable tant qu'elle ne déçoit pas : une
         // réponse concurrente ne doit pas annuler un claim fraîchement reçu.
         connectFailed = false;
-        if (parsedName[0]) sanitizeName(parsedName, svcName, sizeof(svcName));
+        if (parsedName[0]) commitName(parsedName);
         if (client.connected()) {
           client.stop();
           wasConnected = false;
@@ -151,7 +248,7 @@ static void discoveryTick(uint32_t now) {
   }
 }
 
-// --- sortie ---------------------------------------------------
+// --- sortie (tâche réseau uniquement) -------------------------
 static bool sendFrame(uint8_t type, const uint8_t* payload, uint32_t len) {
   if (!client.connected()) return false;
   uint8_t hdr[5];
@@ -169,14 +266,22 @@ static bool sendFrame(uint8_t type, const uint8_t* payload, uint32_t len) {
     size_t n = client.write(payload + sent, chunk);
     if (n == 0) return false;
     sent += n;
-    delay(0);
+    vTaskDelay(1);
   }
   return true;
 }
 
-// sendWav : évite de dupliquer les 2 Mo de PCM — on émet le header
-// puis le buffer directement.
-bool sendWav(const uint8_t hdr44[44], const int16_t* pcm, size_t pcmBytes) {
+static bool sendHello() {
+  // Le jeton protège l'injection de texte : sans le bon jeton, le service
+  // coupe la connexion sans discussion. Vide = pas d'authentification.
+  char payload[112];
+  snprintf(payload, sizeof(payload), "%s\tfw-1.1\t%s", DEVICE_NAME, SERVICE_TOKEN);
+  return sendFrame(0x01, (const uint8_t*)payload, strlen(payload));
+}
+
+// sendWav asynchrone : évite de dupliquer les 2 Mo de PCM — header puis
+// buffer directement, depuis la tâche réseau. La boucle UI, elle, respire.
+static bool uploadWav(const uint8_t hdr44[44], const int16_t* pcm, size_t pcmBytes) {
   if (!client.connected()) return false;
   uint32_t payloadLen = 44 + pcmBytes;
   uint8_t hdr[5];
@@ -192,30 +297,18 @@ bool sendWav(const uint8_t hdr44[44], const int16_t* pcm, size_t pcmBytes) {
   const uint8_t* bytes = (const uint8_t*)pcm;
   uint32_t sent = 0;
   while (sent < pcmBytes) {
+    if (!client.connected()) return false;  // pair mort pendant l'upload
     uint32_t chunk = min((uint32_t)4096, (uint32_t)(pcmBytes - sent));
     size_t n = client.write(bytes + sent, chunk);
     if (n == 0) return false;
     sent += n;
-    delay(0);  // laisse respirer le WiFi
+    vTaskDelay(1);  // laisse respirer le WiFi (et le micro sur ce cœur)
   }
   return true;
 }
 
-bool sendHello() {
-  // Le jeton protège l'injection de texte : sans le bon jeton, le service
-  // coupe la connexion sans discussion. Vide = pas d'authentification.
-  char payload[112];
-  snprintf(payload, sizeof(payload), "%s\tfw-1.1\t%s", DEVICE_NAME, SERVICE_TOKEN);
-  return sendFrame(0x01, (const uint8_t*)payload, strlen(payload));
-}
-
-bool sendEnter() {
-  // Commande volontairement sans payload : pas de relais clavier arbitraire.
-  return sendFrame(0x05, nullptr, 0);
-}
-
 // --- entrée : assemblage de trames ----------------------------
-// Machine à états minimale, non bloquante.
+// Machine à états minimale, non bloquante (tâche réseau uniquement).
 enum { RD_LEN = 0, RD_TYPE = 1, RD_PAYLOAD = 2 };
 static uint8_t  rdPhase = RD_LEN;
 static uint8_t  rdHdr[4];
@@ -224,22 +317,6 @@ static uint8_t  rdType = 0;
 static uint32_t rdLen = 0;
 static uint32_t rdGot = 0;
 static uint8_t  rxBuf[768];
-
-// Petite file de 4 événements (titre/message/extrait).
-static const int EV_SLOTS = 4;
-static char  evBuf[EV_SLOTS][384];
-static uint8_t evType[EV_SLOTS];
-static uint8_t evHead = 0, evTail = 0;
-
-static void pushEvent(uint8_t type, const uint8_t* p, uint32_t len) {
-  uint8_t slot = evHead;
-  uint32_t n = min((uint32_t)(sizeof(evBuf[0]) - 1), len);
-  memcpy(evBuf[slot], p, n);
-  evBuf[slot][n] = 0;
-  evType[slot] = type;
-  evHead = (uint8_t)((evHead + 1) % EV_SLOTS);
-  if (evHead == evTail) evTail = (uint8_t)((evTail + 1) % EV_SLOTS);  // écrase le plus ancien
-}
 
 static void pumpInbound() {
   while (client.connected() && client.available()) {
@@ -264,27 +341,19 @@ static void pumpInbound() {
         rdType = b;
         rdGot = 0;
         rdPhase = (rdLen == 0) ? RD_LEN : RD_PAYLOAD;
-        if (rdLen == 0) pushEvent(rdType, (const uint8_t*)"", 0);
+        if (rdLen == 0) pushEvent(rdType, "", 0);
         break;
       case RD_PAYLOAD: {
         if (rdGot < sizeof(rxBuf)) rxBuf[rdGot] = b;
         rdGot++;
         if (rdGot >= rdLen) {
-          pushEvent(rdType, rxBuf, min(rdGot, (uint32_t)sizeof(rxBuf)));
+          pushEvent(rdType, (const char*)rxBuf, min(rdGot, (uint32_t)sizeof(rxBuf)));
           rdPhase = RD_LEN;
         }
         break;
       }
     }
   }
-}
-
-uint8_t pollEvent(char* buf, size_t cap) {
-  if (evTail == evHead) return 0;
-  uint8_t t = evType[evTail];
-  snprintf(buf, cap, "%s", evBuf[evTail]);
-  evTail = (uint8_t)((evTail + 1) % EV_SLOTS);
-  return t;
 }
 
 // --- pilotage WiFi + logs de diagnostic ----------------------
@@ -310,39 +379,10 @@ static void onWifiEvent(arduino_event_id_t event, arduino_event_info_t info) {
   }
 }
 
-void begin() {
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.onEvent(onWifiEvent);
-  if (Serial) Serial.printf("[wifi] demarrage, ssid=%s\n", WIFI_SSID);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-}
-
-bool wifiUp() { return WiFi.status() == WL_CONNECTED; }
-bool svcUp()  { return client.connected(); }
-
-// Nom (sanitisé) du PC auquel le Stick est attaché, vide si inconnu.
-void serviceName(char* buf, size_t cap) { snprintf(buf, cap, "%s", svcName); }
-
-void loop() {
-  // Heartbeat INCONDITIONNEL toutes les secondes — le diagnostic série
-  // doit marcher quel que soit l'état. Guard `if (Serial)` : sans
-  // terminal ouvert, on ne risque jamais de bloquer sur le CDC.
-  static uint32_t lastHb = 0;
-  if (millis() - lastHb >= 1000) {
-    lastHb = millis();
-    if (Serial) {
-      if (wifiUp()) {
-        Serial.printf("[hb] wifi OK ip=%s rssi=%d tcp=%d svc=%s:%u name=%s\n",
-                      WiFi.localIP().toString().c_str(),
-                      (int)WiFi.RSSI(), client.connected() ? 1 : 0,
-                      serviceIp.toString().c_str(), servicePort, svcName);
-      } else {
-        Serial.printf("[hb] wifi KO status=%d rssi=%d\n",
-                      (int)WiFi.status(), (int)WiFi.RSSI());
-      }
-    }
-  }
+// --- pas de la tâche réseau -----------------------------------
+// Tout ce qui bloquait l'UI vit ici : reconnexion, découverte, pompage.
+static void step() {
+  uint32_t now = millis();
 
   if (!wifiUp()) {
     if (wasConnected) {
@@ -354,22 +394,49 @@ void loop() {
       discoveryStarted = false;
     }
     serviceKnown = false;
+    g_svcUp.store(false, std::memory_order_relaxed);
     return;
   }
 
-  uint32_t now = millis();
   discoveryTick(now);
 
+  // Roaming forcé : le SSID 2,4 GHz peut être émis par plusieurs bornes
+  // (box + répéteur) et le stick reste collé à une mauvaise après un
+  // reconnect. Un lien durablement faible mérite un re-scan ; ça brise
+  // aussi les zombies TCP nés d'une connexion perdue en route.
+  static uint32_t weakSince = 0;
+  {
+    int rssi = WiFi.RSSI();
+    if (rssi < -75) {
+      if (!weakSince) {
+        weakSince = now;
+      } else if (now - weakSince > 60000) {
+        weakSince = 0;
+        if (Serial) {
+          Serial.printf("[wifi] rssi %d durable : re-scan des bornes\n", rssi);
+        }
+        client.stop();
+        g_svcUp.store(false, std::memory_order_relaxed);
+        wasConnected = false;
+        WiFi.disconnect(false, false);
+        WiFi.reconnect();
+        return;
+      }
+    } else {
+      weakSince = 0;
+    }
+  }
+
   if (!client.connected()) {
+    g_svcUp.store(false, std::memory_order_relaxed);
     if (wasConnected) {
       wasConnected = false;
     }
     if (serviceKnown && now - lastConnectTry > 2000) {
       lastConnectTry = now;
       client.stop();
-      // La boucle principale gère aussi l'écran et les boutons : une
-      // reconnexion vers un PC/service absent ne doit jamais la geler.
-      // L'overload ESP32 permet une borne stricte en millisecondes.
+      // Ici, un connect qui bloque n'arrête plus l'interface : c'était le
+      // bug des trois morts. La borne de 50 ms reste une garde honnête.
       bool ok = client.connect(serviceIp, servicePort, 50);
       connectFailed = !ok;
       if (Serial) {
@@ -381,11 +448,13 @@ void loop() {
         client.setNoDelay(true);
         wasConnected = true;
         sendHello();
+        g_svcUp.store(true, std::memory_order_relaxed);
       }
     }
     return;
   }
 
+  g_svcUp.store(true, std::memory_order_relaxed);
   wasConnected = true;
   pumpInbound();
 
@@ -397,6 +466,69 @@ void loop() {
     lastPing = now;
     sendFrame(0x06, nullptr, 0);
   }
+}
+
+static void netTask(void*) {
+  // Heartbeat diagnostic toutes les secondes — hébergé ici pour rester
+  // vivant même pendant un upload. Guard `if (Serial)` : sans terminal
+  // ouvert, on ne bloque jamais sur le CDC.
+  static uint32_t lastHb = 0;
+  for (;;) {
+    if (millis() - lastHb >= 1000) {
+      lastHb = millis();
+      if (Serial) {
+        char nameNow[20];
+        portENTER_CRITICAL(&nameMux);
+        memcpy(nameNow, svcName, sizeof(nameNow));
+        portEXIT_CRITICAL(&nameMux);
+        if (wifiUp()) {
+          Serial.printf("[hb] wifi OK ip=%s rssi=%d tcp=%d svc=%s:%u name=%s\n",
+                        WiFi.localIP().toString().c_str(),
+                        (int)WiFi.RSSI(), g_svcUp.load() ? 1 : 0,
+                        serviceIp.toString().c_str(), servicePort, nameNow);
+        } else {
+          Serial.printf("[hb] wifi KO status=%d rssi=%d\n",
+                        (int)WiFi.status(), (int)WiFi.RSSI());
+        }
+      }
+    }
+
+    step();
+
+    // Envoi WAV demandé par l'UI : l'upload vit ici, l'UI respire.
+    if (sendPending.load(std::memory_order_acquire)) {
+      bool ok = uploadWav(sendReq.hdr, sendReq.pcm, sendReq.bytes);
+      sendPending.store(false, std::memory_order_relaxed);
+      pushEvent(EV_SEND_RESULT, ok ? "ok" : "ko", 2);
+    }
+
+    // Entrée demandée par l'UI : émise ici, sans write bloquant côté UI.
+    if (enterPending.exchange(false)) {
+      sendFrame(0x05, nullptr, 0);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(2));
+  }
+}
+
+void begin() {
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.onEvent(onWifiEvent);
+  if (Serial) Serial.printf("[wifi] demarrage, ssid=%s\n", WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  evQueue = xQueueCreate(8, sizeof(EventItem));
+  xTaskCreatePinnedToCore(netTask, "sticks3-net", 8192, nullptr, 1, nullptr, 0);
+}
+
+bool wifiUp() { return WiFi.status() == WL_CONNECTED; }
+bool svcUp()  { return g_svcUp.load(std::memory_order_relaxed); }
+
+// Nom (sanitisé) du PC auquel le Stick est attaché, vide si inconnu.
+void serviceName(char* buf, size_t cap) {
+  portENTER_CRITICAL(&nameMux);
+  snprintf(buf, cap, "%s", svcName);
+  portEXIT_CRITICAL(&nameMux);
 }
 
 }  // namespace net
