@@ -55,6 +55,29 @@ NORI_VARIANTS = re.compile(
     r"\b(?:nori|nory|nouri|noury|nauri|naury|nozri|nozry)\b", re.IGNORECASE
 )
 
+# Ponctuation interrogative : les moteurs STT oublient souvent le "?" final.
+# On l'ajoute si la dictée ressemble à une question et ne finit par aucune
+# ponctuation. Le "que" nu est volontairement absent (trop d'impératifs
+# comme « Que la force soit avec toi »).
+INTERRO_START = re.compile(
+    r"^\s*(est-ce que|qu'est-ce que|c'est quoi|à quoi|de quoi|à qui|de qui|"
+    r"qui|quoi|où|quand|comment|pourquoi|combien|quel(le|s)?)\b",
+    re.IGNORECASE,
+)
+INTERRO_INVERSION = re.compile(
+    r"\b\w+-(tu|je|il|elle|on|vous|ce)\b", re.IGNORECASE
+)
+TERMINAL_PUNCT = re.compile(r"[?.!:\]]\s*$")
+
+
+def ensure_question_mark(text: str) -> str:
+    t = text.rstrip()
+    if not t or TERMINAL_PUNCT.search(t):
+        return text
+    if INTERRO_START.match(t) or INTERRO_INVERSION.search(t):
+        return t + " ?"
+    return text
+
 
 def normalize_transcript(text: str) -> str:
     return NORI_VARIANTS.sub("Nori", text)
@@ -221,6 +244,7 @@ def handle_wav(sock: socket.socket, wav: bytes, name: str) -> None:
     # On aplatit les retours ligne : dans un prompt OpenCode, un
     # Entrée ferait partir le message à moitié.
     flat = " ".join(text.split())
+    flat = ensure_question_mark(flat)
 
     try:
         how = paste_text(
