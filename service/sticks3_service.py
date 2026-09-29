@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import socket
 import struct
@@ -70,15 +71,36 @@ def load_config() -> dict:
 
 CFG = load_config()
 
+# Chemin du log : passé par le lanceur via STICKS3_LOG_FILE, sinon le
+# standard %LOCALAPPDATA%\StickS3\service.log. Sous pythonw, stdout est un
+# no-op silencieux (bug vécu, 2026-09-30) : le FICHIER est la source de
+# vérité des logs, écrits en UTF-8.
+LOG_PATH = Path(
+    os.environ.get(
+        "STICKS3_LOG_FILE",
+        str(Path(os.environ.get("LOCALAPPDATA", ".")) / "StickS3" / "service.log"),
+    )
+)
+_LOG_LOCK = threading.Lock()
+
 
 def log(msg: str) -> None:
     line = f"[{time.strftime('%H:%M:%S')}] {msg}"
+    # Ouverture par écrit (aucun handle gardé : le fichier reste lisible par
+    # les outils de diagnostic) et verrou pour les threads concurrents.
+    with _LOG_LOCK:
+        try:
+            LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(LOG_PATH, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass  # un log ne doit jamais faire tomber une requête
     try:
         print(line, flush=True)
     except UnicodeEncodeError:
-        # console restrictive (cp1252 & co) : on dégrade au lieu de
-        # planter — un log ne doit jamais faire tomber une requête
         print(line.encode("ascii", "replace").decode("ascii"), flush=True)
+    except (OSError, ValueError):
+        pass  # console absente (pythonw) ou fermée : le fichier suffit
 
 
 # ------------------------------------------------------------

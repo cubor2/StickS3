@@ -18,7 +18,7 @@ function Stop-WithMessage([string]$Message) {
         New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
         Add-Content -Path (Join-Path $LogDir 'service.log') `
             -Value ("[{0}] ERREUR lanceur : {1}" -f (Get-Date -Format 'HH:mm:ss'), $Message) `
-            -Encoding Unicode
+            -Encoding utf8
         exit 1
     }
     Read-Host 'Appuie sur Entree pour fermer' | Out-Null
@@ -111,6 +111,20 @@ if ($Background) {
     $LogDir = Join-Path $env:LOCALAPPDATA 'StickS3'
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
     $LogFile = Join-Path $LogDir 'service.log'
+    # Rotation unique : le vieux log UTF-16 part en .old ; tout le nouveau
+    # contenu est UTF-8, ecrit par le service lui-meme (pythonw avale
+    # stdout, bug verifie 2026-09-30).
+    if (Test-Path -LiteralPath $LogFile) {
+        $fs = [System.IO.File]::OpenRead($LogFile)
+        $b0 = $fs.ReadByte(); $b1 = $fs.ReadByte()
+        $fs.Close()
+        if ($b0 -eq 0xFF -and $b1 -eq 0xFE) {
+            Move-Item -LiteralPath $LogFile -Destination ($LogFile + '.utf16.old') -Force
+        }
+    }
+    # Le service ecrit son log LUI-MEME : le chemin lui passe par
+    # l'environnement (heritage fiable pour un executable sans console).
+    $env:STICKS3_LOG_FILE = $LogFile
     # py.exe est un LAUNCHER : il faut resoudre le vrai interpretable pour
     # trouver pythonw.exe a cote (le -replace sur py.exe ne matche rien).
     $RealPython = (& $Python.Source -c "import sys; print(sys.executable)").Trim()
@@ -131,7 +145,7 @@ if ($Background) {
                 exit 0
             }
         } catch { }
-        Add-Content -Path $LogFile -Value ("[{0}] superviseur : service relance apres arret (duree {1:n0} s)" -f (Get-Date -Format 'HH:mm:ss'), $Sw.Elapsed.TotalSeconds) -Encoding Unicode
+        Add-Content -Path $LogFile -Value ("[{0}] superviseur : service relance apres arret (duree {1:n0} s)" -f (Get-Date -Format 'HH:mm:ss'), $Sw.Elapsed.TotalSeconds) -Encoding utf8
         # Sortie quasi immediate et service absent : vraie defaillance en
         # boucle, attendre 60 s au lieu de marteler.
         if ($Sw.Elapsed.TotalSeconds -lt 10) { Start-Sleep -Seconds 60 }
