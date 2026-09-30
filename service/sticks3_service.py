@@ -176,9 +176,13 @@ class StickHub:
             self._socks[name] = sock
         log(f"stick connecté : {name}")
 
-    def unregister(self, name: str) -> None:
+    def unregister(self, name: str, sock: socket.socket) -> None:
+        # Nettoyage prudent : une connexion zombie qui meurt en retard ne
+        # doit pas retirer l'entrée d'une connexion VIVANTE au même nom
+        # (bug vécu : le stick reconnecté perdait sa sonnette).
         with self._lock:
-            self._socks.pop(name, None)
+            if self._socks.get(name) is sock:
+                self._socks.pop(name, None)
         log(f"stick déconnecté : {name}")
 
     def count(self) -> int:
@@ -313,7 +317,7 @@ def handle_stick(sock: socket.socket, addr) -> None:
     except (ConnectionError, OSError, ValueError) as exc:
         log(f"[{name}] coupure : {exc}")
     finally:
-        HUB.unregister(name)
+        HUB.unregister(name, sock)
         try:
             sock.close()
         except OSError:
