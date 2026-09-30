@@ -207,10 +207,10 @@ class StickHub:
 
 HUB = StickHub()
 
-# Anti-spam de la sonnette : chaque session OpenCode qui finit un tour sonne
-# (la mienne, celle des questions, celle de la collègue du Chantier-Chat...).
-# Cinq fins de tour dans la même minute = UN ding suffit à prévenir.
-NOTIFY_COOLDOWN_S = float(CFG.get("notify_cooldown_s", 30))
+# Sonnette : un ding par fin de session OpenCode, sans cooldown par défaut.
+# La clé reste disponible pour qui veut limiter le bruit de plusieurs IA
+# actives en même temps (0 = désactivé).
+NOTIFY_COOLDOWN_S = float(CFG.get("notify_cooldown_s", 0))
 _LAST_NOTIFY = [0.0]
 
 
