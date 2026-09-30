@@ -32,6 +32,9 @@ void serviceName(char* buf, size_t cap);  // nom du PC attaché, "" si inconnu
 // Délègue l'upload du WAV à la tâche réseau (non bloquant). false si un
 // envoi est déjà en vol. Le résultat remonte via pollEvent (0xFD).
 bool requestSend(const uint8_t hdr44[44], const int16_t* pcm, size_t pcmBytes);
+// Avorte l'envoi en vol (plafond d'attente UI atteint). Prend effet entre
+// deux chunks ; un write déjà bloqué attendra lwIP.
+void cancelSend();
 // Délègue l'appui Entrée. true si le service est joignable.
 bool requestEnter();
 // Vrai tant que l'upload du WAV est en vol (pour geler le timer de patience).

@@ -630,11 +630,21 @@ void loop() {
       // ancien ferait déborder le calcul en négatif et expirer l'état juste.
       // 90 s : aligné sur la patience du service (120 s API). Trop court,
       // le stick criait « pas de reponse » puis le collé tardif survenait.
-      // Le chrono NE COMPTE PAS pendant l'upload (tâche réseau, lien parfois
-      // lent en roaming) : il ne mesure que l'attente de la transcription.
+      // DEUX horloges :
+      //  - la patience de transcription (90 s), gelée pendant l'upload et
+      //    rafraîchie quand il se termine (0xFD ok) ;
+      //  - un PLAFOND DUR (5 min depuis l'entrée) : zombie, service mort,
+      //    write bloqué — quoi qu'il arrive, la roue ne tourne jamais
+      //    éternellement. Le bug de l'éternelle roue est ici enterré.
       if (!net::sendBusy() && millis() - stateSince > 90000) {
         ui::error("pas de reponse");
         sfxError();
+        net::cancelSend();
+        go(ST_TRANSIENT);
+      } else if (millis() - stateSince > 300000) {
+        ui::error("envoi bloque");
+        sfxError();
+        net::cancelSend();
         go(ST_TRANSIENT);
       }
       break;

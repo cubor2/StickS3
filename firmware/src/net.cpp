@@ -103,6 +103,7 @@ static struct {
   size_t bytes;
 } sendReq;
 static std::atomic<bool> sendPending{false};
+static std::atomic<bool> sendCancelled{false};
 static std::atomic<bool> enterPending{false};
 
 bool requestSend(const uint8_t hdr44[44], const int16_t* pcm, size_t pcmBytes) {
@@ -112,8 +113,16 @@ bool requestSend(const uint8_t hdr44[44], const int16_t* pcm, size_t pcmBytes) {
   memcpy(sendReq.hdr, hdr44, 44);
   sendReq.pcm = pcm;
   sendReq.bytes = pcmBytes;
+  sendCancelled.store(false, std::memory_order_relaxed);
   sendPending.store(true, std::memory_order_release);
   return true;
+}
+
+void cancelSend() {
+  // Demande d'avortement posée par l'UI (plafond d'attente atteint) :
+  // l'upload s'arrête entre deux chunks. Un write DÉJÀ bloqué ne peut pas
+  // être interrompu — lwIP finira par lâcher, et l'UI a déjà tourné la page.
+  sendCancelled.store(true, std::memory_order_relaxed);
 }
 
 bool requestEnter() {
@@ -283,6 +292,16 @@ static bool sendHello() {
 // buffer directement, depuis la tâche réseau. La boucle UI, elle, respire.
 static bool uploadWav(const uint8_t hdr44[44], const int16_t* pcm, size_t pcmBytes) {
   if (!client.connected()) return false;
+
+  // Porte de vivacité : un ping juste avant l'upload. Si le pair est un
+  // zombie (connexion morte que lwIP croit encore établie — service tué
+  // pendant que le stick regardait ailleurs), le RST arrive en un aller-
+  // retour et l'échec est immédiat, au lieu de retransmettre pendant des
+  // minutes dans le vide.
+  sendFrame(0x06, nullptr, 0);
+  vTaskDelay(pdMS_TO_TICKS(300));
+  if (!client.connected()) return false;
+
   uint32_t payloadLen = 44 + pcmBytes;
   uint8_t hdr[5];
   hdr[0] = (uint8_t)(payloadLen);
@@ -294,10 +313,15 @@ static bool uploadWav(const uint8_t hdr44[44], const int16_t* pcm, size_t pcmByt
   if (client.write(hdr, 5) != 5) return false;
   if (client.write(hdr44, 44) != 44) return false;
 
+  // Deadline totale : au-delà de 90 s, l'envoi est avorté — un lien
+  // vraiment lent finit en "ko" propre plutôt qu'en roue éternelle.
+  uint32_t deadline = millis() + 90000;
   const uint8_t* bytes = (const uint8_t*)pcm;
   uint32_t sent = 0;
   while (sent < pcmBytes) {
-    if (!client.connected()) return false;  // pair mort pendant l'upload
+    if (!client.connected()) return false;
+    if (sendCancelled.load(std::memory_order_relaxed)) return false;
+    if ((int32_t)(millis() - deadline) >= 0) return false;
     uint32_t chunk = min((uint32_t)4096, (uint32_t)(pcmBytes - sent));
     size_t n = client.write(bytes + sent, chunk);
     if (n == 0) return false;
@@ -497,6 +521,7 @@ static void netTask(void*) {
 
     // Envoi WAV demandé par l'UI : l'upload vit ici, l'UI respire.
     if (sendPending.load(std::memory_order_acquire)) {
+      sendCancelled.store(false, std::memory_order_relaxed);
       bool ok = uploadWav(sendReq.hdr, sendReq.pcm, sendReq.bytes);
       sendPending.store(false, std::memory_order_relaxed);
       pushEvent(EV_SEND_RESULT, ok ? "ok" : "ko", 2);
