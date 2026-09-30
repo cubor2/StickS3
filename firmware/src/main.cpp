@@ -651,12 +651,16 @@ void loop() {
       }
       break;
 
-    case ST_NOTIFY:
+case ST_NOTIFY:
       if (millis() - stateSince > 4000) {
         enterIdle();
        } else if (aClicked) {
-         enterIdle();
-      }
+         // Un ding ne bouche pas le micro : un clic pendant la sonnette
+         // DICTE tout de suite. Le son est déjà fini (il est bloquant), le
+         // codec est libre ; une notification en attente jouera après la
+         // prise via la file habituelle.
+         startRecording();
+       }
       break;
 
     case ST_ENTER:
