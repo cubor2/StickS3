@@ -21,7 +21,8 @@ function Stop-WithMessage([string]$Message) {
             -Encoding utf8
         exit 1
     }
-    Read-Host 'Appuie sur Entree pour fermer' | Out-Null
+    # La pause d'erreur est le travail du .cmd appelant (Pause-Si-Humain) :
+    # humain = fenetre qui attend, agent = fenetre qui se referme.
     exit 1
 }
 
@@ -162,6 +163,6 @@ if ($ServiceExitCode -ne 0) {
 } else {
     Write-Host 'Service arrete.' -ForegroundColor Yellow
 }
-# Le .cmd appelant termine par un `pause` : la fenetre reste ouverte pour
-# relire les logs, que le service se soit arrete proprement ou non.
+# La pause finale est le travail du .cmd appelant (Pause-Si-Humain) :
+# humain = la fenetre attend, agent = elle se referme sans temoin.
 exit $ServiceExitCode
