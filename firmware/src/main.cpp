@@ -189,10 +189,12 @@ static void sfxEnter() {                 // touche Entrée — clic court, sobre
 }
 
 // ---------- volume réglable -----------------------------------
-// 0-5 crans, plafonnés à ~78 % comme le recommande la note constructeur
-// (au-delà, le StickS3 peut redémarrer sur batterie). Persisté en NVS :
-// un réglage qui disparaîtrait à chaque extinction auto serait absurde.
-static const uint8_t VOL_STEPS[6] = {0, 40, 80, 120, 160, 200};
+// 0-5 crans. Le cran max est plafonné à 176/255 (~69 %) : la note
+// constructeur place la zone de reboot brownout au-delà de ~75 %, et les
+// notifications (un ding toutes les quelques minutes) suffisent à faire
+// chuter la tension et rebooter le stick en boucle (vérifié 2026-09-30 :
+// chaque ding = un 10054 côté service = un reboot). Persisté en NVS.
+static const uint8_t VOL_STEPS[6] = {0, 40, 80, 120, 160, 176};
 static uint8_t volStep = 2;
 static uint32_t aHeldSince = 0;
 
