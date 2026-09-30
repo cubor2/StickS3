@@ -207,6 +207,12 @@ class StickHub:
 
 HUB = StickHub()
 
+# Anti-spam de la sonnette : chaque session OpenCode qui finit un tour sonne
+# (la mienne, celle des questions, celle de la collègue du Chantier-Chat...).
+# Cinq fins de tour dans la même minute = UN ding suffit à prévenir.
+NOTIFY_COOLDOWN_S = float(CFG.get("notify_cooldown_s", 30))
+_LAST_NOTIFY = [0.0]
+
 
 # ------------------------------------------------------------
 # Traitement d'une dictée : WAV → texte → collage
@@ -416,6 +422,16 @@ class NotifyHandler(BaseHTTPRequestHandler):
         title = str(body.get("title", "C'EST PRET !"))
         message = str(body.get("message", ""))
         sound = str(body.get("sound", "frites"))
+
+        # Cooldown : /test passe toujours (test manuel voulu), /notify est
+        # borné — plusieurs IA qui finissent dans la même fenêtre = un ding.
+        if self.path == "/notify":
+            now = time.time()
+            if now - _LAST_NOTIFY[0] < NOTIFY_COOLDOWN_S:
+                self._json(200, {"ok": True, "throttled": True})
+                log(f"notif '{title}' ignorée (cooldown {NOTIFY_COOLDOWN_S:n0}s)")
+                return
+            _LAST_NOTIFY[0] = now
 
         sent = HUB.broadcast_notify(title, message, sound)
         self._json(200, {"ok": True, "sticks": sent})
